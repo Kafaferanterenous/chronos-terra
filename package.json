@@ -1,0 +1,46 @@
+{
+    "name":  "chronos-terra",
+    "productName":  "ChronosTerra",
+    "version":  "0.15.4",
+    "description":  "Planetary correlation observatory - quakes x solar x tides, 1970-present",
+    "main":  "electron-main.js",
+    "author":  "local",
+    "license":  "MIT",
+    "scripts":  {
+                    "start":  "electron .",
+                    "dist":  "electron-builder --win portable"
+                },
+    "build":  {
+                  "appId":  "com.local.chronosterra",
+                  "productName":  "ChronosTerra",
+                  "files":  [
+                                "app.js",
+                                "electron-main.js",
+                                "preload.js",
+                                "index.html",
+                                "style.css",
+                                "data/**/*",
+                                "vendor/**/*"
+                            ],
+                  "directories":  {
+                                      "output":  "dist"
+                                  },
+                  "win":  {
+                              "target":  [
+                                             {
+                                                 "target":  "portable",
+                                                 "arch":  [
+                                                              "x64"
+                                                          ]
+                                             }
+                                         ]
+                          },
+                  "portable":  {
+                                   "artifactName":  "ChronosTerra-Portable-${version}.exe"
+                               }
+              },
+    "devDependencies":  {
+                            "electron":  "^43.4.1",
+                            "electron-builder":  "^26.15.3"
+                        }
+}

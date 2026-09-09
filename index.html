@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chronos-Terra — Planetary Correlation Observatory</title>
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="bootScreen">
+  <div class="boot-inner">
+    <div class="boot-icon">🌍</div>
+    <div class="boot-title">Chronos-Terra</div>
+    <div class="boot-msg">Please wait… Loading planetary archive…</div>
+    <div class="boot-bar"><span></span></div>
+    <div class="boot-sub" id="bootSub">decoding 294,000 earthquakes</div>
+  </div>
+</div>
+
+<header>
+  <div class="brand">Chronos<b>Terra</b><span class="tagline">planetary correlation observatory</span></div>
+  <div class="top-actions">
+    <span id="statChip" class="chip">archive: loading…</span>
+    <button id="liveBtn" class="hbtn live-btn" title="Jump to live — last 24 hours, with forecast CMEs">● Live</button>
+    <div class="view-tabs">
+      <button id="tabGlobe" class="vt on">🌐 Globe</button>
+      <button id="tabFlat" class="vt">🗺️ Flat map</button>
+      <button id="tabGraphs" class="vt">📈 Graphs</button>
+      <button id="tabPapers" class="vt">📚 Studies</button>
+    </div>
+    <button id="aboutBtn" class="hbtn" title="What am I looking at?">ℹ️</button>
+    <button id="gearBtn" class="hbtn" title="Settings">⚙️</button>
+    <button id="helpBtn" class="hbtn" title="Help · user guide & acronym glossary">❓</button>
+  </div>
+</header>
+
+<aside id="sidebar">
+  <h3>Layers</h3>
+
+  <label class="layer-row">
+    <input type="checkbox" id="lyQuakes" checked><span class="swatch q"></span>Earthquakes
+  </label>
+  <div class="layer-sub">
+    <div class="ctl"><span>opacity</span><input type="range" id="opQuakes" min="0" max="100" value="85"></div>
+    <div class="ctl"><span>min magnitude <b id="magVal">4.5</b></span><input type="range" id="magMin" min="45" max="90" value="45"></div>
+  </div>
+
+  <label class="layer-row">
+    <input type="checkbox" id="lyPlates" checked><span class="swatch p"></span>Tectonic plate boundaries
+  </label>
+
+  <label class="layer-row">
+    <input type="checkbox" id="lyGrid" checked><span class="swatch g"></span>Graticule
+  </label>
+
+  <label class="layer-row">
+    <input type="checkbox" id="lyVolcs" checked><span class="swatch" style="background:#c9401f"></span>Volcanoes (GVP)
+  </label>
+
+  <label class="layer-row">
+    <input type="checkbox" id="lyCaps"><span class="swatch" style="background:#ffd700"></span>Capital cities
+  </label>
+
+  <h3>Solar events</h3>
+  <label class="layer-row">
+    <input type="checkbox" id="lyCMEs" checked><span class="swatch" style="background:#4fc3f7"></span>CME footprints
+  </label>
+  <label class="layer-row" id="lyRowFlr">
+    <input type="checkbox" id="lyFlares" checked><span class="swatch" style="background:#ff8c1a"></span>Flare dayside blobs
+  </label>
+  <p class="livenote-hint">pulsing = forecast · muted teal = known impact</p>
+
+  <h3>Live now</h3>
+  <label class="layer-row" id="lyRowLive">
+    <input type="checkbox" id="lyLive24" checked><span class="swatch live"></span>M2.5+ last 24 h
+  </label>
+  <label class="layer-row" id="lyRowHz">
+    <input type="checkbox" id="lyHazards" checked><span class="swatch hz"></span>GDACS hazards
+  </label>
+  <div class="hz-types">
+    <label title="Cyclone"><input type="checkbox" data-hz="TC" checked>🌀</label>
+    <label title="Flood"><input type="checkbox" data-hz="FL" checked>🌊</label>
+    <label title="Wildfire"><input type="checkbox" data-hz="WF">🔥</label>
+    <label title="Volcano"><input type="checkbox" data-hz="VO" checked>🌋</label>
+    <label title="Drought"><input type="checkbox" data-hz="DR" checked>🌾</label>
+  </div>
+  <p class="livenote-hint">live layers hide while the timeline plays</p>
+  <div id="hzLegend" class="hz-legend"></div>
+
+  <h3>Solar wind / CME</h3>
+  <div id="cmeBox" class="cme-box">loading…</div>
+
+  <h3>Solar flares <small style="color:#55608a">(30 d)</small></h3>
+  <label class="layer-row" id="lyRowFlr">
+    <input type="checkbox" id="lyFlares" checked><span class="swatch" style="background:#ff8c1a"></span>flare dayside blobs
+  </label>
+  <div id="flrBox">loading…</div>
+  <div id="cmeStatus" style="font-size:10.5px;color:#55608a;margin-top:6px;min-height:14px"></div>
+  <button id="donkiFetchBtn" class="hbtn" style="width:100%;font-size:11px;margin-top:4px">⟳ Fetch 10yr CME + flare history</button>
+
+  <div class="legend">
+    <h4>Magnitude</h4>
+    <div class="lg"><i style="background:#ffd166"></i>&lt; 5.5</div>
+    <div class="lg"><i style="background:#ff9f43"></i>5.5 – 6.4</div>
+    <div class="lg"><i style="background:#ff6b6b"></i>6.5 – 7.4</div>
+    <div class="lg"><i style="background:#ff2e63"></i>≥ 7.5</div>
+  </div>
+
+  <h3>Crustal stress gauge <small style="color:#55608a">(experimental)</small></h3>
+  <canvas id="gaugeCv" style="width:100%;height:80px"></canvas>
+  <div id="gaugeTxt" class="arcstat"></div>
+
+  <p class="fineprint">Archive: USGS M4.5+ 1970 → today.<br>Exploratory research tool — not peer-reviewed.</p>
+  <div id="corrStat" class="corr-stat"></div>
+</aside>
+
+<main id="mapWrap">
+  <div id="map"></div>
+
+  <div id="notifyStack"></div>
+
+  <button id="anaBtn" title="Open correlation lab">📊 Correlation lab</button>
+
+  <div id="anaPanel" class="hidden">
+    <div class="ana-head"><span>Correlation lab</span><button id="anaClose">×</button></div>
+
+    <label class="ana-lbl">Variable A (driver)</label>
+    <select id="varA">
+      <option value="sn">Sunspot number (SILSO)</option>
+      <option value="kp">Kp geomagnetic index (GFZ)</option>
+      <option value="f107">F10.7 solar radio flux (GFZ)</option>
+      <option value="qcount" selected>Quake count / month</option>
+      <option value="qenergy">Quake energy / month</option>
+      <option value="qmaj">M6+ count / month</option>
+      <option value="ve">Volcano eruptions / month</option>
+    </select>
+
+    <label class="ana-lbl">Variable B (response)</label>
+    <select id="varB">
+      <option value="sn">Sunspot number (SILSO)</option>
+      <option value="kp" selected>Kp geomagnetic index (GFZ)</option>
+      <option value="f107">F10.7 solar radio flux (GFZ)</option>
+      <option value="qcount">Quake count / month</option>
+      <option value="qenergy">Quake energy / month</option>
+      <option value="qmaj" selected>M6+ count / month</option>
+      <option value="ve">Volcano eruptions / month</option>
+    </select>
+
+    <label class="ana-lbl">Lag of B behind A: <b id="lagVal">0</b> months</label>
+    <input type="range" id="lagR" min="-24" max="36" value="0">
+
+    <button id="computeBtn">Compute r at this lag</button>
+    <canvas id="lagCanvas"></canvas>
+    <div class="ana-lbl">M6+ clustering by 27-day solar rotation</div>
+    <canvas id="cycA" class="mini-cv"></canvas>
+    <div class="ana-lbl">M6+ clustering by 29.53-day spring/neap phase</div>
+    <canvas id="cycB" class="mini-cv"></canvas>
+
+    <div style="border-top:1px solid var(--brd);margin:12px 0;padding-top:10px">
+      <div class="ana-lbl" style="margin-bottom:6px">⚡ Trigger windows — average quake response around event days</div>
+      <select id="twTrig" style="width:100%;background:#141c30;color:var(--txt);border:1px solid var(--brd);border-radius:8px;padding:6px;font-size:12.5px">
+        <option value="newmoon">New moon</option>
+        <option value="fullmoon">Full moon</option>
+        <option value="kpstorm">Kp storm day (Kp ≥ 5)</option>
+        <option value="fhigh">F10.7 high day (≥ 200 sfu)</option>
+      </select>
+      <div class="ctl" style="margin:6px 0"><span>window ±<b id="twWv">7</b> days</span><input type="range" id="twW" min="2" max="15" value="7"></div>
+      <button id="twBtn" class="hbtn" style="width:100%;font-size:12px">⚡ Search trigger window</button>
+    </div>
+    <canvas id="twCanvas" style="width:100%;height:140px;background:rgba(255,255,255,.03);border:1px solid var(--brd);border-radius:8px;display:none;margin-top:6px"></canvas>
+    <div id="twOut" style="font-size:12px;color:#8b96bd;line-height:1.55;margin-top:4px"></div>
+    <div id="anaOut">Pick two variables and compute. Positive lag = B happens AFTER A.</div>
+  </div>
+
+  <div id="aboutPanel" class="side-panel hidden">
+    <div class="ana-head"><span>What am I looking at?</span><button id="aboutClose">×</button></div>
+    <div class="about-body">
+      <p><b>Chronos-Terra</b> is a tool for the curious. It exists to explore one question:
+      do cosmic forces — solar storms, geomagnetic upheavals, the pull of the Moon and Sun —
+      influence <b>when</b> and <b>where</b> earthquakes happen?</p>
+      <h4>If we find a correlation</h4>
+      <p>That's good. It could point toward new understanding.</p>
+      <h4>If we don't find a correlation</h4>
+      <p>That's good too. Knowing what <i>doesn't</i> matter is just as valuable — it narrows the search.</p>
+      <h4>Either way</h4>
+      <p>This is an observatory you can hold in your hands. It overlays 56 years of
+      global earthquakes (USGS archive, M4.5+, 1970 → today) against solar-terrestrial drivers.</p>
+      <h4>The map</h4>
+      <p><b>Orange→red dots</b>: historical quakes inside the timeline window at the bottom — bigger and redder = stronger.
+      <b>Cyan dots</b>: quakes in the last 24 hours. <b>Purple/blue/other colored dots</b>: active GDACS hazards
+      (cyclones, floods, wildfires, volcanoes, droughts). <b>Blue lines</b>: tectonic plate boundaries — most quakes
+      hug them. Tiny <b>gold dots</b> (enable in ⚙️ Settings): world capital cities, click one for details.</p>
+      <h4>The timeline</h4>
+      <p>Drag the histogram to sweep through history; ▶ plays an animated sweep. The orange line above the histogram is
+      the sunspot cycle for context. The <b>● Live</b> button jumps to the past 7 days and watches for new events.</p>
+      <h4>Correlation lab</h4>
+      <p>Compare monthly series (sunspots, Kp geomagnetic index, F10.7 flux vs quake counts/energy/M6+) with lags from
+      −24 to +36 months. Permutation p-values tell you if a peak beats random chance. Phase histograms test M6+ clustering
+      against the 27-day Bartels solar rotation and 29.53-day spring/neap tide cycles.</p>
+      <h4>Data sources</h4>
+      <p>USGS earthquake archives &amp; live feeds · GFZ Potsdam Kp/ap/SN/F10.7 since 1932 (Matzka et al. 2021) ·
+      SILSO sunspot numbers · NASA DONKI CME database · GDACS hazard alerts · Natural Earth / fraxen plate geometry ·
+      capitals reference values are approximations.</p>
+      <p class="fineprint">Exploratory research tool. Nothing here is peer-reviewed science or a prediction.</p>
+    </div>
+  </div>
+
+  <div id="settingsPanel" class="side-panel hidden">
+    <div class="ana-head"><span>Settings</span><button id="settingsClose">×</button></div>
+    <label class="ana-lbl">Spoken announcements</label>
+    <select id="setSpeech">
+      <option value="on">Speak notifications aloud</option>
+      <option value="off">Silent</option>
+    </select>
+    <label class="ana-lbl">Check for new events</label>
+    <select id="setPoll">
+      <option value="load">Only when app starts</option>
+      <option value="3">Every 3 minutes</option>
+      <option value="5" selected>Every 5 minutes</option>
+      <option value="10">Every 10 minutes</option>
+      <option value="15">Every 15 minutes</option>
+    </select>
+    <label class="ana-lbl">Timeline animation speed</label>
+    <select id="setSpeed">
+      <option value="2">Very slow — 2 days per second (sit back)</option>
+      <option value="10" selected>Relaxed — 10 days per second</option>
+      <option value="30">Steady — 1 month per second</option>
+      <option value="120">Brisk — 4 months per second</option>
+    </select>
+    <label class="ana-lbl">DONKI history depth (CMEs + flares)</label>
+    <select id="setDonkiYears">
+      <option value="1">1 year (~4 chunks, ~16 s)</option>
+      <option value="2">2 years (~8 chunks, ~32 s)</option>
+      <option value="5" selected>5 years (~20 chunks, ~80 s)</option>
+      <option value="10">10 years (~40 chunks, ~160 s)</option>
+      <option value="15">15 years (~60 chunks, ~240 s)</option>
+    </select>
+    <label class="ana-lbl">Guided tour</label>
+    <label class="layer-row" style="margin:0 0 12px;font-size:12.5px">
+      <input type="checkbox" id="setShowTutorial"> Show intro tour on next launch
+    </label>
+    <label class="ana-lbl">Data archive</label>
+    <div id="arcStat" class="arcstat">checking…</div>
+    <button id="updBtn" class="hbtn upd-btn">⟳ Update archive (missing data only)</button>
+    <p class="fineprint">Settings persist on this computer.</p>
+  </div>
+
+  <div id="helpPanel" class="full-view hidden">
+    <div class="ana-head"><span>❓ Help — how to use Chronos-Terra &amp; glossary</span>
+      <span class="ana-actions"><button id="helpBtnReopen" class="tt" data-tip="Show the intro tour from the start.">▶ tour</button><button id="helpClose">×</button></span>
+    </div>
+    <div class="help-body">
+
+      <div class="help-sec">
+        <h3>1 · Core idea</h3>
+        <p>Chronos-Terra overlays <b>56 years of global earthquakes</b> (USGS archive, M4.5+, 1970 → today) against
+        <b>solar-terrestrial drivers</b> — solar wind, geomagnetic indices, sunspot cycles — so you can explore whether
+        cosmic forces influence <b>when</b> and <b>where</b> quakes happen. Finding a correlation is good; finding none is
+        equally valuable. <i>This is an exploratory research tool, not peer-reviewed science or a prediction.</i></p>
+      </div>
+
+      <div class="help-sec">
+        <h3>2 · The map views (🌐 Globe · 🗺️ Flat)</h3>
+        <ul>
+          <li><b>Dots on the map</b> are earthquakes inside the current timeline window: bigger and redder = stronger. Orange→red = older, cyan = last 24 h.</li>
+          <li><b>Blue lines</b> — tectonic plate boundaries (most quakes hug them). <b>Red triangles</b> — volcanoes (GVP catalogue).</li>
+          <li><b>Coloured blobs</b> — live GDACS hazard alerts (cyclone 🌀 · flood 🌊 · wildfire 🔥 · volcano 🌋 · drought 🌾).</li>
+          <li><b>Gold dots</b> — world capital cities (turn on in the ⚙️ layers). Click any map feature for details.</li>
+          <li><b>Pulsing features</b> = forecast; muted teal = known impact. Darken with the sidebar opacity slider.</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>3 · The timeline bar (bottom of map)</h3>
+        <ul>
+          <li><b>Drag the histogram</b> to sweep through history; <b>▶</b> animates the sweep. The orange line/strip is the 11-year sunspot cycle (toggle ☀ cycle / ☀ yearly).</li>
+          <li><b>Range buttons</b> 1D·7D·3M·1Y·5Y·10Y·ALL zoom the window. <b>● Live</b> jumps to the last 24 h and watches for new events.</li>
+          <li>Live layers (cyan quakes, GDACS hazards) hide while the timeline plays.</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>4 · Graphs view (📈 Graphs)</h3>
+        <ul>
+          <li>Switch to <b>Graphs</b> and the map controls disappear — the chart takes the full window.</li>
+          <li><b>Check the series</b> you want (eruptions, sunspots, Kp, F10.7 flux, quakes, proton density, SW pressure, IMF Bz, IMF |B|, Dst, SW E-field). Each is scaled independently so shapes compare, not magnitudes; the right edge shows each series' min/max.</li>
+          <li><b>Range selector</b> picks the time window; ‹ › pager steps it backward/forward; <b>M≥</b> sets the smallest magnitude counted in the quakes series.</li>
+          <li><b>Hover the chart</b>: a dashed crosshair plus a floating tag shows the <b>full date and every series value</b> at that instant.</li>
+          <li><b>data ▾</b> manages the bundled NASA OMNIWeb (OMNI2) solar-wind series — each can be refreshed to today's data (saved locally).</li>
+          <li>Below the chart: correlation stats, lag-strips (gold outline = strongest lag), and volcano/quarry context. <i>If a line stops before "today", its data simply ends there — hover the tag to see the last date.</i></li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>5 · Studies &amp; news (📚 Studies)</h3>
+        <ul>
+          <li><b>Left</b>: short summaries of peer-reviewed studies on solar-terrestrial influence, with links to the originals.</li>
+          <li><b>Right</b>: a live news column — sun &amp; space weather, volcanoes, extreme weather and today's quakes. Click any headline to open it. ⟳ refreshes manually; auto-refresh every 15 min.</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>6 · Correlation lab (📊)</h3>
+        <ul>
+          <li>Pick a <b>driver A</b> (solar/space variable) and <b>response B</b> (quakes/volcanoes), set a <b>lag</b> of B behind A, then <b>compute r</b>. Positive lag = B happens AFTER A.</li>
+          <li><b>Permutation p-values</b> tell you whether a peak beats random chance. <b>Phase histograms</b> test clustering against the 27-day solar rotation and 29.53-day lunar spring/neap cycle.</li>
+          <li><b>Trigger windows</b> average the quake response around event days (new moon, full moon, Kp storm, F10.7 high) — pick a ±-day window and search.</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>7 · Settings, shortcuts &amp; tips</h3>
+        <ul>
+          <li>⚙️ <b>Settings</b>: spoken announcements, checking-for-new-events interval, timeline sweep speed, DONKI history depth.</li>
+          <li><span class="kbd">F11</span> fullscreen · <span class="kbd">Esc</span> close overlays/help/tutorial.</li>
+          <li>ℹ️ <b>What am I looking at?</b> gives the quick orientation · ❓ this help screen is always one click away · ▶ tour replays the intro.</li>
+          <li>Heads-up: the <b>proton-density → quake</b> idea is the Marchitelli et al. (2020) hypothesis — exploratory only.</li>
+        </ul>
+      </div>
+
+      <div class="help-sec">
+        <h3>8 · Glossary — every acronym</h3>
+        <table class="gloss">
+          <tr><th>Term</th><th>Meaning</th></tr>
+          <tr><td>ACE</td><td>NASA's Advanced Composition Explorer — spacecraft at the L1 point measuring the live solar wind (SWEPAM instrument).</td></tr>
+          <tr><td>Ap</td><td>Linear (amplitude) version of Kp; a bigger-number daily geomagnetic activity file index (GFZ Potsdam).</td></tr>
+          <tr><td>Bz (IMF Bz)</td><td>The north/south component of the interplanetary magnetic field. Strongly southward Bz opens Earth's magnetosphere and feeds storms.</td></tr>
+          <tr><td>CME</td><td>Coronal Mass Ejection — a billion-ton cloud of solar plasma/magnetic field hurled into space; the main driver of geomagnetic storms.</td></tr>
+          <tr><td>DONKI</td><td>NASA's Database of Notifications, Knowledge &amp; Information — the CME / flare catalogue used here.</td></tr>
+          <tr><td>Dst</td><td>Disturbance storm-time index (nT) — measures the strength of the equatorial ring current; strongly negative = magnetic storm.</td></tr>
+          <tr><td>E-field / SW E-field</td><td>Solar-wind motional electric field V×Bz (mV/m) — the rate energy feeds into the magnetosphere.</td></tr>
+          <tr><td>EUV</td><td>Extreme UltraViolet — solar radiation that heats/ionizes Earth's upper atmosphere.</td></tr>
+          <tr><td>F10.7</td><td>Solar radio flux at 10.7 cm (in <b>sfu</b>) — a centuries-spanning proxy for the Sun's overall activity.</td></tr>
+          <tr><td>GDACS</td><td>Global Disaster Alert and Coordination System — live alerts for cyclones, floods, wildfires, volcanoes, droughts.</td></tr>
+          <tr><td>GFZ (Potsdam)</td><td>German Research Centre for Geosciences — source of the Kp/ap/SN/F10.7 series since 1932 (Matzka et al. 2021).</td></tr>
+          <tr><td>GSM</td><td>Geocentric Solar-Magnetospheric coordinate frame — the reference for Bz used in geomagnetic-coupling physics.</td></tr>
+          <tr><td>GVP</td><td>Smithsonian Global Volcanism Program — the eruption catalogue behind the volcano layer &amp; series.</td></tr>
+          <tr><td>IMF</td><td>Interplanetary Magnetic Field — the Sun's magnetic field carried by the solar wind; described by Bz (GSM) and |B| (total strength).</td></tr>
+          <tr><td>ISC</td><td>International Seismological Centre — cross-referenced quake catalogue behind the graph series.</td></tr>
+          <tr><td>Kp</td><td>Planetary geomagnetic index (0–9) — how agitated Earth's magnetic field is; proxies solar-wind pressure on the magnetosphere.</td></tr>
+          <tr><td>L1</td><td>Lagrange point 1 — the Sun–Earth balance point ~1.5 million km sunward, where ACE/SOHO sit ~1 h ahead of the solar wind's arrival.</td></tr>
+          <tr><td>M2.5 / M4.5 / M5.6 / M6+</td><td>Earthquake magnitudes: M4.5+ is the USGS archive floor used here; M5.6+ is the threshold in the Marchitelli proton-density hypothesis; M6+ is the "strong" tier in the correlation lab.</td></tr>
+          <tr><td>NASA</td><td>US National Aeronautics and Space Administration — DONKI, ACE, OMNIWeb data.</td></tr>
+          <tr><td>NOAA</td><td>US National Oceanic and Atmospheric Administration — SWPC and the live SWEPAM proton feed.</td></tr>
+          <tr><td>OMNI2 / OMNIWeb</td><td>NASA/GSFC's consolidated near-Earth solar-wind dataset (OMNI2 = daily, OMNIWeb = fine resolution) — the historical magnetosphere series used by the Graphs view.</td></tr>
+          <tr><td>sfu</td><td>Solar Flux Unit (10⁻²² W m⁻² Hz⁻¹) — the unit of the F10.7 index.</td></tr>
+          <tr><td>SILSO / SN</td><td>SILSO = World Data Center Sunspot Index and Long-term Solar Observations; SN = daily/monthly sunspot number (the 11-year cycle).</td></tr>
+          <tr><td>SOHO</td><td>ESA/NASA Solar and Heliospheric Observatory — sits at L1 as the reference point for the live proton "next to Earth" framing.</td></tr>
+          <tr><td>SWEPAM</td><td>Solar Wind Electron, Proton and Alpha Monitor on ACE — the instrument behind the live proton-density feed.</td></tr>
+          <tr><td>SWPC</td><td>NOAA Space Weather Prediction Center — US official alerts &amp; particle feeds.</td></tr>
+          <tr><td>USGS</td><td>US Geological Survey — the earthquake archive and live feeds used throughout.</td></tr>
+          <tr><td>UTC</td><td>Coordinated Universal Time — the time standard all timestamps in this app are stored in.</td></tr>
+          <tr><td>V×B</td><td>Solar-wind velocity cross magnetic-field — the coupling that creates the motional E-field feeding the magnetosphere.</td></tr>
+        </table>
+      </div>
+
+      <div class="help-sec">
+        <h3>9 · Data sources</h3>
+        <ul>
+          <li><b>Quakes</b>: USGS archive &amp; live feeds (M4.5+, 1970→today) · <b>Indices</b>: GFZ Potsdam Kp/ap/SN/F10.7, SILSO sunspots · <b>Space weather</b>: NASA OMNIWeb (OMNI2 daily), NASA DONKI CME/flare DB, NOAA SWPC live feeds · <b>Hazards</b>: GDACS · <b>Geography</b>: Natural Earth, fraxen plate geometry · <b>News</b>: USGS earthquake feed + Google News RSS (sun / volcanoes / weather) · Capital-city coordinates are approximations.</li>
+          <li class="h-ft">Exploratory research tool. Nothing here is peer-reviewed science or a prediction.</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="capPopup" class="hidden"></div>
+
+  <div id="graphsPanel" class="full-view hidden">
+    <div class="ana-head"><span>Time-series overlay graphs</span><span class="ana-actions"><button id="magnetDataBtn" class="tt" data-tip="Manage the bundled solar-wind / magnetosphere data (proton density, IMF Bz, SW pressure, Dst, E-field). Each can be refreshed from NASA OMNIWeb on demand.">data ▾</button><button id="graphsClose">×</button></span></div>
+    <div class="g-series" id="gSeries">
+      <label class="tt" data-tip="Volcano eruptions per month — Smithsonian GVP catalog, 1970→now"><input type="checkbox" id="gve"><i style="width:10px;height:10px;border-radius:2px;background:#ff5a3c;display:inline-block"></i>eruptions / month</label>
+      <label class="tt" data-tip="Sunspot number (SILSO) — the 11-year solar cycle. Correlates with solar activity overall."><input type="checkbox" id="gsn"><i style="width:10px;height:10px;border-radius:2px;background:#ffb86b;display:inline-block"></i>sunspots SN</label>
+      <label class="tt" data-tip="Kp geomagnetic index (GFZ) — how agitated Earth's magnetic field is. Proxies solar-wind pressure on the magnetosphere."><input type="checkbox" id="gkp"><i style="width:10px;height:10px;border-radius:2px;background:#9b6bff;display:inline-block"></i>Kp index</label>
+      <label class="tt" data-tip="F10.7 solar radio flux (GFZ) — a proxy for EUV/radio output that reaches Earth."><input type="checkbox" id="gf10"><i style="width:10px;height:10px;border-radius:2px;background:#4fffd7;display:inline-block"></i>F10.7 flux</label>
+      <label class="tt" data-tip="Quake count per time bin, from the USGS/ISC archive. Use the M≥ selector to change which magnitudes count."><input type="checkbox" id="gq" checked><i style="width:10px;height:10px;border-radius:2px;background:#5ea8ff;display:inline-block"></i>quakes</label>
+      <label class="tt" data-tip="Live solar-wind PROTON DENSITY from NOAA ACE SWEPAM (L1 point, next to the SOHO satellite). Only ~24 h of live data exists. THEORETICAL/EXPERIMENTAL — this is the Marchitelli et al. 2020 trigger hypothesis (proton density → M≥5.6 quakes ~1 day later). Exploratory only, not a verified mechanism."><input type="checkbox" id="gpd"><i style="width:10px;height:10px;border-radius:2px;background:#ff9de2;display:inline-block"></i>proton density <span style="opacity:.6">(live · theory)</span></label>
+      <label class="tt" data-tip="Bundled historical solar-wind PROTON DENSITY (NASA OMNIWeb OMNI2, daily, 1970→now). THEORETICAL — the Marchitelli et al. 2020 trigger hypothesis (proton density → M≥5.6 quakes ~1 day later). Exploratory only."><input type="checkbox" id="gd2"><i style="width:10px;height:10px;border-radius:2px;background:#35c9c0;display:inline-block"></i>proton density <span style="opacity:.6">(hist · theory)</span></label>
+      <label class="tt" data-tip="Historical solar-wind dynamic (flow) pressure in nPa (OMNI2 daily). The shock-pressure term behind the Marchitelli mechanism."><input type="checkbox" id="gpr"><i style="width:10px;height:10px;border-radius:2px;background:#e0b0ff;display:inline-block"></i>SW pressure</label>
+      <label class="tt" data-tip="Historical southward IMF Bz (GSM, nT) — the solar magnetic field coupling that opens Earth's magnetosphere (the 'sun &amp; Earth are magnets' term)."><input type="checkbox" id="gbz"><i style="width:10px;height:10px;border-radius:2px;background:#7dff6a;display:inline-block"></i>IMF Bz</label>
+      <label class="tt" data-tip="Historical IMF total field strength |B| (nT) — how strong the sun's magnetic field is at L1."><input type="checkbox" id="gim"><i style="width:10px;height:10px;border-radius:2px;background:#ffd76a;display:inline-block"></i>IMF |B|</label>
+      <label class="tt" data-tip="Historical Dst index (nT) — the classic geomagnetic STORM-strength index (ring current). Negative = storm."><input type="checkbox" id="gdst"><i style="width:10px;height:10px;border-radius:2px;background:#ff8a4a;display:inline-block"></i>Dst index</label>
+      <label class="tt" data-tip="Historical solar-wind motional E-field (mV/m) = V×Bz — the rate energy feeds into the magnetosphere."><input type="checkbox" id="gef"><i style="width:10px;height:10px;border-radius:2px;background:#9adcff;display:inline-block"></i>SW E-field</label>
+      <label class="tt" data-tip="Minimum magnitude for the quakes series (USGS archive only goes to M4.5+)."><span style="font-size:11px;color:var(--muted)">M≥</span>
+        <select id="gMag" style="background:#141c30;color:var(--txt);border:1px solid var(--brd);border-radius:6px;padding:2px 4px;font-size:12px">
+          <option value="4.5">4.5+</option>
+          <option value="5">5.0+</option>
+          <option value="6">6.0+</option>
+          <option value="7">7.0+</option>
+        </select>
+      </label>
+    </div>
+    <div class="g-rangebar">
+      <button id="gPrev" class="g-pager tt" data-tip="Move the time window earlier (one range-width back)">‹</button>
+      <select id="gRange" class="tt" data-tip="How much time the graph spans. Hover each option's meaning below.">
+        <option value="all">Full archive 1970 → now</option>
+        <option value="y25">Last 25 years</option>
+        <option value="y10">Last 10 years</option>
+        <option value="y5">Last 5 years</option>
+        <option value="y3">Last 3 years</option>
+        <option value="y1" selected>Last year</option>
+        <option value="m6">Last 6 months</option>
+        <option value="m3">Last 3 months</option>
+        <option value="m30">Last 30 days</option>
+      </select>
+      <button id="gNext" class="g-pager tt" data-tip="Move the time window later (toward today)">›</button>
+    </div>
+    <div id="graphDebug"></div>
+    <div id="gWinTip" class="gWinTip"></div>
+    <div id="graphStage"><canvas id="graphCanvas"></canvas><div id="graphCursorTag" class="hidden"></div></div>
+    <div id="graphTip">hover the chart to inspect · each series scaled independently for overlay comparison</div>
+    <div id="graphEnrich"></div>
+  </div>
+
+  <div id="papersPanel" class="full-view hidden">
+    <div class="ana-head"><span>Studies &amp; literature — solar activity and Earth events</span><button id="papersClose">×</button></div>
+    <div class="papers-intro" style="max-width:none">Peer-reviewed work on whether the Sun can influence earthquakes, eruptions and space-weather effects on Earth. Each entry links the original paper and notes what it found — and what it didn't. This is exploratory context, not a verdict.</div>
+    <div class="papers-cols">
+      <div id="papersList"></div>
+      <aside id="rssCol" class="rss-col">
+        <div class="rss-head"><span>🛰️ Live news feed</span><button id="rssRefresh" title="Refresh all feeds now">⟳ refresh</button></div>
+        <div class="rss-note">Sun &amp; space weather · volcanoes · extreme weather · quakes today. Auto-refreshes every 15 min. Click any headline to open it in your browser.</div>
+        <div id="rssFeeds"></div>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<section id="timelineBar">
+  <button id="playBtn" title="Play time sweep">▶</button>
+  <div class="spans">
+    <button data-span="d1">1D</button>
+    <button data-span="d7">7D</button>
+    <button data-span="m3">3M</button>
+    <button data-span="y1" class="on">1Y</button>
+    <button data-span="y5">5Y</button>
+    <button data-span="y10">10Y</button>
+    <button data-span="all">ALL</button>
+  </div>
+  <canvas id="tlCanvas"></canvas>
+  <button id="sunStripBtn" class="sun-toggle on" title="Toggle 11-year sunspot cycle strip (synced to timeline)">☀ cycle</button>
+  <button id="sunBarsBtn" class="sun-toggle" title="Toggle yearly sunspot total bars (11-yr solar cycle)">☀ yearly</button>
+  <div id="sparkWrap" title="Last 7 days · daily earthquake count (M4.5+)">
+    <canvas id="sparkCanvas" width="220" height="48"></canvas>
+  </div>
+  <div id="tlReadout">—</div>
+</section>
+
+<div id="magnetDialog" class="magnet-dialog hidden">
+  <div class="magnet-dialog-head"><span>Space-weather data</span><button id="magnetDialogClose">×</button></div>
+  <div class="magnet-dialog-body">
+    <p class="magnet-dialog-note">Bundled historical daily series from <b>NASA OMNIWeb (OMNI2)</b>, 1970→now. Each can be individually refreshed from the live mirror. Any refresh is saved to your local cache so the app keeps working offline.</p>
+    <div id="magnetRows"></div>
+  </div>
+</div>
+<div id="tutorialOverlay" class="tutorial-overlay hidden">
+  <div id="tutorialHighlight" class="tutorial-highlight"></div>
+  <div id="tutorialBubble" class="tutorial-bubble">
+    <div id="tutorialText" class="tutorial-text"></div>
+    <div class="tutorial-nav">
+      <span id="tutorialStep" class="tutorial-step"></span>
+      <button id="tutorialEnd" class="tutorial-btn tutorial-btn-end">End intro</button>
+      <button id="tutorialNext" class="tutorial-btn">Next →</button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
