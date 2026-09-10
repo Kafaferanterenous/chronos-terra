@@ -1,20 +1,22 @@
 {
     "name":  "chronos-terra",
     "productName":  "ChronosTerra",
-    "version":  "0.15.4",
+    "version":  "0.16.0",
     "description":  "Planetary correlation observatory - quakes x solar x tides, 1970-present",
     "main":  "electron-main.js",
     "author":  "local",
     "license":  "MIT",
     "scripts":  {
                     "start":  "electron .",
-                    "dist":  "electron-builder --win portable"
+                    "dist":  "electron-builder --win portable",
+                    "dist:mac":  "electron-builder --mac dmg zip --x64 --arm64"
                 },
     "build":  {
                   "appId":  "com.local.chronosterra",
                   "productName":  "ChronosTerra",
                   "files":  [
                                 "app.js",
+                                "moon.js",
                                 "electron-main.js",
                                 "preload.js",
                                 "index.html",
@@ -25,6 +27,26 @@
                   "directories":  {
                                       "output":  "dist"
                                   },
+                  "mac":  {
+                              "target":  [
+                                             {
+                                                 "target":  "dmg",
+                                                 "arch":  [
+                                                              "x64",
+                                                              "arm64"
+                                                          ]
+                                             },
+                                             {
+                                                 "target":  "zip",
+                                                 "arch":  [
+                                                              "x64",
+                                                              "arm64"
+                                                          ]
+                                             }
+                                         ],
+                              "category":  "public.app-category.utilities",
+                              "artifactName":  "ChronosTerra-${version}-${arch}.${ext}"
+                          },
                   "win":  {
                               "target":  [
                                              {

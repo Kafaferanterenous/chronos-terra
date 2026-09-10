@@ -1,0 +1,31 @@
+name: macOS build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install build deps
+        run: npm install --no-audit --no-fund
+
+      - name: Build macOS apps (x64 + arm64)
+        run: npx electron-builder --mac dmg zip --x64 --arm64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronos-mac-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error

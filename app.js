@@ -60,7 +60,7 @@ function buildMap(land, plates) {
       id: 'quakes-circle', source: 'quakes', type: 'circle',
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['get', 'm'], 4.5, 1.6, 5.5, 3.2, 6.5, 6, 7.5, 11, 9.5, 18],
-        'circle-color': ['step', ['get', 'm'], '#ffd166', 5.5, '#ff9f43', 6.5, '#ff6b6b', 7.5, '#ff2e63'],
+        'circle-color': syzColorExpr(),
         'circle-opacity': 0.85,
         'circle-stroke-width': 0.4,
         'circle-stroke-color': 'rgba(255,255,255,.25)'
@@ -234,7 +234,7 @@ function drawQuakeWindow() {
   for (let i = a; i < b; i += stride) {
     feats[k++] = {
       type: 'Feature',
-      properties: { m: S.q.m[i] },
+      properties: { m: S.q.m[i], g: S.q.syz ? S.q.syz[i] : 0 },
       geometry: { type: 'Point', coordinates: [S.q.lo[i], S.q.la[i]] }
     };
   }
@@ -531,9 +531,60 @@ async function loadVolcs() {
   } catch (e) { log('volcanoes failed: ' + (e.message || e)); }
 }
 
+/* ---------- sun/moon same-side (new moon) windows, ±3 days ---------- */
+const SYZ_DEG = 37;                        // lunar–solar elongation covered in ~3 d (≈12.2°/d)
+const RD = Math.PI / 180;
+function _norm360(x) { x %= 360; return x < 0 ? x + 360 : x; }
+function syzElongDeg(ms) {
+  /* Meeus low-precision geocentric ecliptic longitudes — ample for a ±3-day window. */
+  const T = (ms / 86400000 + 2440587.5 - 2451545.0) / 36525;
+  const L0 = 280.46646 + 36000.76983 * T + 0.0003032 * T * T;
+  const g = 357.52911 + 35999.05029 * T - 0.0001537 * T * T;
+  const sl = _norm360(L0 + 1.914602 * Math.sin(g * RD) + 0.019993 * Math.sin(2 * g * RD) + 0.000289 * Math.sin(3 * g * RD));
+  const Lp = 218.3164477 + 481267.88123421 * T - 0.0015786 * T * T;
+  const D = 297.8501921 + 445267.1114034 * T - 0.0018819 * T * T;
+  const Ms = 357.5291092 + 35999.0502909 * T - 0.0001536 * T * T;
+  const Mp = 134.9633964 + 477198.8675055 * T + 0.0087414 * T * T;
+  const F = 93.2720993 + 483202.0175273 * T - 0.0034029 * T * T;
+  const ml = _norm360(Lp
+    + 6.288775 * Math.sin(Mp * RD)
+    + 1.274018 * Math.sin((2 * D - Mp) * RD)
+    + 0.658309 * Math.sin(2 * D * RD)
+    + 0.213616 * Math.sin(2 * Mp * RD)
+    - 0.185596 * Math.sin(Ms * RD)
+    - 0.114336 * Math.sin(2 * F * RD)
+    + 0.058793 * Math.sin((2 * D - 2 * Mp) * RD)
+    + 0.057212 * Math.sin((2 * D - Ms - Mp) * RD)
+    + 0.05332 * Math.sin((2 * D + Mp) * RD));
+  let el = Math.abs(_norm360(ml - sl));
+  if (el > 180) el = 360 - el;
+  return el;
+}
+function computeSyzygy() {
+  if (!S.q || !S.volcs || S.q.syz) return;
+  const t = S.q.t, syz = new Uint8Array(t.length);
+  for (let i = 0; i < t.length; i++) {
+    if (syzElongDeg(t[i] * 1000) <= SYZ_DEG) syz[i] = 1;
+  }
+  S.q.syz = syz;
+  const e = S.volcs.e, es = new Uint8Array(e.length);
+  for (let i = 0; i < e.length; i++) {
+    const mo = e[i][1];
+    if (mo == null) continue;
+    if (syzElongDeg(Date.UTC(e[i][0], mo - 1, 15)) <= SYZ_DEG) es[i] = 1;
+  }
+  S.eruptionSyz = es;
+  log('syzygy windows scanned: ' + t.length + ' quakes + ' + e.length + ' eruptions (±3 d of a new moon)');
+}
+function syzColorExpr() {
+  const mag = ['step', ['get', 'm'], '#ffd166', 5.5, '#ff9f43', 6.5, '#ff6b6b', 7.5, '#ff2e63'];
+  const on = (typeof SET === 'undefined' || SET.syz !== 'off');
+  return on ? ['case', ['==', ['get', 'g'], 1], '#fff2b0', mag] : mag;
+}
+
 /* ---------- settings ---------- */
 const SET = Object.assign(
-  { speech: 'on', poll: '5', speed: '10', donkiYears: '5' },
+  { speech: 'on', poll: '5', speed: '10', donkiYears: '5', syz: 'on' },
   JSON.parse(localStorage.getItem('ct_settings') || '{}')
 );
 function saveSet() { localStorage.setItem('ct_settings', JSON.stringify(SET)); }
@@ -541,6 +592,7 @@ function applySet() {
   $('setSpeech').value = SET.speech;
   $('setPoll').value = SET.poll;
   $('setSpeed').value = SET.speed;
+  if ($('setSyz')) $('setSyz').checked = SET.syz !== 'off';
   restartPoll();
 }
 function speak(txt) {
@@ -1510,9 +1562,15 @@ function wireTimeline() {
       if (!S.playing) return;
       const dt = lastTs == null ? 1 / 60 : Math.min(0.25, (ts - lastTs) / 1000);
       lastTs = ts;
-      const step = Math.max(0.2 * 864e5 / 60, (+SET.speed || 10) * 864e5 * dt);
+      const step = Math.max(0.01 * 864e5 / 60, (+SET.speed || 10) * 864e5 * dt);
       S.winEnd += step;
-      if (S.winEnd >= S.tMax * 1000) { S.winEnd = S.tMax * 1000; stopPlay(); refreshQuakes(); return; }
+      if (S.winEnd >= S.tMax * 1000) {
+        if (S.winEnd - S.spanMs > S.tMin * 1000) {
+          S.winEnd = S.tMax * 1000 - S.spanMs;   // wrap: loop the window instead of stalling at the archive end
+        } else {
+          S.winEnd = S.tMax * 1000; stopPlay(); refreshQuakes(); return;
+        }
+      }
       S.winStart = S.winEnd - S.spanMs;
       refreshQuakes();
       requestAnimationFrame(tick);
@@ -1561,6 +1619,7 @@ function applySidebar() {
   vis('flare-hist-line', showFlare && !liveLayers && narrow);
   if (S.map.getLayer('quakes-circle')) {
     S.map.setPaintProperty('quakes-circle', 'circle-opacity', $('opQuakes').value / 100);
+    S.map.setPaintProperty('quakes-circle', 'circle-color', syzColorExpr());
     const mm = $('magMin').value / 10;
     $('magVal').textContent = mm.toFixed(1);
     S.map.setFilter('quakes-circle', ['>=', ['get', 'm'], mm]);
@@ -2144,6 +2203,7 @@ function wireRSS() {
 function wireGraphs() {
   $('graphsClose').addEventListener('click', () => setView('globe'));
   $('papersClose').addEventListener('click', () => setView('globe'));
+  $('moonClose').addEventListener('click', () => setView('globe'));
   [...document.querySelectorAll('#gSeries input')].forEach(cb => cb.addEventListener('change', loadGraphSeries));
   $('gMag').addEventListener('change', loadGraphSeries);
   $('gRange').addEventListener('change', () => { graphWinEnd = null; updateGraphWinTip(); loadGraphSeries(); });
@@ -2690,6 +2750,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     loadCapitals();
     bootMsg('loading volcanoes + solar indices…');
     await loadVolcs();
+    computeSyzygy();
     await loadKp();
     await loadSilso();
     bootMsg('rendering quakes…');
@@ -2730,6 +2791,10 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
       SET.tutorialDone = !e.target.checked; saveSet();
       if (e.target.checked) startTutorial();
     });
+    $('setSyz').checked = SET.syz !== 'off';
+    $('setSyz').addEventListener('change', e => {
+      SET.syz = e.target.checked ? 'on' : 'off'; saveSet(); applySidebar();
+    });
     $('setSpeech').addEventListener('change', e => {
       SET.speech = e.target.value; saveSet();
       if (SET.speech === 'on') speak('Speech enabled.');
@@ -2768,7 +2833,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     checkNew(true);   // first pass: mark current events seen without spamming
 
 function setView(mode) {
-  document.body.classList.remove('view-globe', 'view-flat', 'view-graphs', 'view-papers');
+  document.body.classList.remove('view-globe', 'view-flat', 'view-graphs', 'view-papers', 'view-moon');
   document.body.classList.add('view-' + mode);
   const hp = $('helpPanel');
   if (hp) hp.classList.add('hidden');   // full-screen overlays clear when switching views
@@ -2777,8 +2842,12 @@ function setView(mode) {
   $('tabFlat').classList.toggle('on', mode === 'flat');
   $('tabGraphs').classList.toggle('on', mode === 'graphs');
   $('tabPapers').classList.toggle('on', mode === 'papers');
+  $('tabMoon').classList.toggle('on', mode === 'moon');
   $('graphsPanel').classList.toggle('hidden', mode !== 'graphs');
   $('papersPanel').classList.toggle('hidden', mode !== 'papers');
+  $('moonPanel').classList.toggle('hidden', mode !== 'moon');
+  if (mode === 'moon' && window.MoonView) MoonView.enter();
+  else if (window.MoonView) MoonView.leave();
   if (mode === 'globe' || mode === 'flat') {
     try {
       S.map.setProjection({ type: mode === 'globe' ? 'globe' : 'mercator' });
@@ -2798,6 +2867,7 @@ $('tabGlobe').addEventListener('click', () => setView('globe'));
 $('tabFlat').addEventListener('click', () => setView('flat'));
 $('tabGraphs').addEventListener('click', () => setView('graphs'));
 $('tabPapers').addEventListener('click', () => setView('papers'));
+$('tabMoon').addEventListener('click', () => setView('moon'));
 
     bootMsg('ready');
     const elapsed = Date.now() - bootT0;
