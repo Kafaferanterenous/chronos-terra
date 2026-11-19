@@ -22,6 +22,7 @@
   <div class="brand">Chronos<b>Terra</b><span class="tagline">planetary correlation observatory</span></div>
   <div class="top-actions">
     <span id="statChip" class="chip">archive: loading…</span>
+    <button id="dataHealth" class="chip data-health" title="Data source health — click for details" aria-expanded="false">data: checking…</button>
     <button id="liveBtn" class="hbtn live-btn" title="Jump to live — last 24 hours, with forecast CMEs">● Live</button>
     <div class="view-tabs">
       <button id="tabGlobe" class="vt on">🌐 Globe</button>
@@ -34,6 +35,7 @@
     <button id="gearBtn" class="hbtn" title="Settings">⚙️</button>
     <button id="helpBtn" class="hbtn" title="Help · user guide & acronym glossary">❓</button>
   </div>
+  <div id="healthPop" class="hidden"></div>
 </header>
 
 <aside id="sidebar">
@@ -88,6 +90,10 @@
   </div>
   <p class="livenote-hint">live layers hide while the timeline plays</p>
   <div id="hzLegend" class="hz-legend"></div>
+  <label class="layer-row" id="lyRowClimate">
+    <input type="checkbox" id="lyClimate" checked><span class="swatch climate"></span>Climate / weather on timeline
+  </label>
+  <div id="climateBox" class="cme-box">loading GDACS climate events…</div>
 
   <h3>Solar wind / CME</h3>
   <div id="cmeBox" class="cme-box">loading…</div>
@@ -165,8 +171,20 @@
         <option value="fullmoon">Full moon</option>
         <option value="kpstorm">Kp storm day (Kp ≥ 5)</option>
         <option value="fhigh">F10.7 high day (≥ 200 sfu)</option>
+        <option value="xflare">X-class flare (DONKI history)</option>
+        <option value="cme">Earth-directed CME (DONKI history)</option>
+        <option value="m6">M6+ quake (archive)</option>
+        <option value="climate">Climate / weather event (GDACS)</option>
       </select>
       <div class="ctl" style="margin:6px 0"><span>window ±<b id="twWv">7</b> days</span><input type="range" id="twW" min="2" max="15" value="7"></div>
+      <div class="ctl" style="margin:6px 0"><span>quake magnitude ≥</span>
+        <select id="twMag" class="tw-mag">
+          <option value="4.5" selected>M4.5</option>
+          <option value="5">M5</option>
+          <option value="6">M6</option>
+          <option value="7">M7</option>
+        </select>
+      </div>
       <button id="twBtn" class="hbtn" style="width:100%;font-size:12px">⚡ Search trigger window</button>
     </div>
     <canvas id="twCanvas" style="width:100%;height:140px;background:rgba(255,255,255,.03);border:1px solid var(--brd);border-radius:8px;display:none;margin-top:6px"></canvas>
@@ -326,7 +344,9 @@
         <ul>
           <li>Pick a <b>driver A</b> (solar/space variable) and <b>response B</b> (quakes/volcanoes), set a <b>lag</b> of B behind A, then <b>compute r</b>. Positive lag = B happens AFTER A.</li>
           <li><b>Permutation p-values</b> tell you whether a peak beats random chance. <b>Phase histograms</b> test clustering against the 27-day solar rotation and 29.53-day lunar spring/neap cycle.</li>
-          <li><b>Trigger windows</b> average the quake response around event days (new moon, full moon, Kp storm, F10.7 high) — pick a ±-day window and search.</li>
+          <li><b>Trigger windows</b> average the quake response around event days (new moon, full moon, Kp storm, F10.7 high, X-flares, Earth-directed CMEs, M6+ quakes, climate events) — pick a ±-day window and search.</li>
+          <li><b>Time-series overlays</b> add a lag-scan strip under the graphs. The dashed band is an uncorrected 95% null; the strip also reports <b>Benjamini–Hochberg</b> q-values across every scanned lag, and <b>A/B previous window</b> ghosts the immediately preceding equal-width window so you can see whether a peak is stable.</li>
+          <li><b>Region</b> restricts the quake series, lag scan and event markers to a coarse latitude/longitude box. These are rectangles, not tectonic-plate boundaries.</li>
         </ul>
       </div>
 
@@ -390,7 +410,7 @@
   <div id="capPopup" class="hidden"></div>
 
   <div id="graphsPanel" class="full-view hidden">
-    <div class="ana-head"><span>Time-series overlay graphs</span><span class="ana-actions"><button id="magnetDataBtn" class="tt" data-tip="Manage the bundled solar-wind / magnetosphere data (proton density, IMF Bz, SW pressure, Dst, E-field). Each can be refreshed from NASA OMNIWeb on demand.">data ▾</button><button id="graphsClose">×</button></span></div>
+    <div class="ana-head"><span>Time-series overlay graphs</span><span class="ana-actions"><button id="graphExport" class="tt" data-tip="Export the current chart as a PNG with a caption, plus a JSON record of the exact window, series and lag result.">⤓ export</button><button id="magnetDataBtn" class="tt" data-tip="Manage the bundled solar-wind / magnetosphere data (proton density, IMF Bz, SW pressure, Dst, E-field). Each can be refreshed from NASA OMNIWeb on demand.">data ▾</button><button id="graphsClose">×</button></span></div>
     <div class="g-series" id="gSeries">
       <label class="tt" data-tip="Volcano eruptions per month — Smithsonian GVP catalog, 1970→now"><input type="checkbox" id="gve"><i style="width:10px;height:10px;border-radius:2px;background:#ff5a3c;display:inline-block"></i>eruptions / month</label>
       <label class="tt" data-tip="Sunspot number (SILSO) — the 11-year solar cycle. Correlates with solar activity overall."><input type="checkbox" id="gsn"><i style="width:10px;height:10px;border-radius:2px;background:#ffb86b;display:inline-block"></i>sunspots SN</label>
@@ -412,6 +432,15 @@
           <option value="7">7.0+</option>
         </select>
       </label>
+      <label class="tt" data-tip="Restrict the quake series, lag scan and event markers to a coarse latitude/longitude box. These are rectangles, not tectonic-plate boundaries — useful for comparison, not a plate model."><span style="font-size:11px;color:var(--muted)">region</span>
+        <select id="gRegion" style="background:#141c30;color:var(--txt);border:1px solid var(--brd);border-radius:6px;padding:2px 4px;font-size:12px">
+          <option value="all" selected>All</option>
+          <option value="pacific">Pacific Rim</option>
+          <option value="americas">Americas</option>
+          <option value="eurasia">Eurasia</option>
+          <option value="south">Southern hemisphere</option>
+        </select>
+      </label>
     </div>
     <div class="g-rangebar">
       <button id="gPrev" class="g-pager tt" data-tip="Move the time window earlier (one range-width back)">‹</button>
@@ -427,6 +456,15 @@
         <option value="m30">Last 30 days</option>
       </select>
       <button id="gNext" class="g-pager tt" data-tip="Move the time window later (toward today)">›</button>
+    </div>
+    <div class="g-viewbar">
+      <select id="viewPreset" class="tt" data-tip="Restore a built-in or saved combination of range, magnitude, series and lag window.">
+        <option value="">— view preset —</option>
+      </select>
+      <button id="viewSave" class="tt" data-tip="Save the current graph setup in this browser.">save view</button>
+      <button id="viewDelete" class="tt" data-tip="Delete the selected saved view.">delete</button>
+      <label class="g-events tt" data-tip="Draw dashed markers for solar flares, CMEs, climate events and the largest quakes in the window. Hover a marker to identify it."><input type="checkbox" id="gEvents" checked> event markers</label>
+      <span id="viewNote" class="g-note"></span>
     </div>
     <div id="graphDebug"></div>
     <div id="gWinTip" class="gWinTip"></div>

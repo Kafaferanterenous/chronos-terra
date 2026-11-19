@@ -19,5 +19,6 @@ contextBridge.exposeInMainWorld('ct', {
   donkiSaveCache: (type, data) => ipcRenderer.invoke('donki-save-cache', type, data),
   updateArchive: () => ipcRenderer.invoke('update-archive'),
   archiveInfo: () => ipcRenderer.invoke('archive-info'),
+  saveFile: (name, data, encoding) => ipcRenderer.invoke('save-file', name, data, encoding),
   log: (msg) => console.log('[renderer] ' + msg)
 });

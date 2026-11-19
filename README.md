@@ -104,9 +104,17 @@ tests/            PowerShell live‑endpoint smoke tests
 - [x] v0.15.x — focus views, denser rulers, cursor readout, Studies + live news, help system
 - [x] v0.16.0 — Earth–Moon tides view, syzygy (new‑moon) event highlight, play‑wrap, speed presets down to 30 m/s
 - [ ] macOS / ARM portable builds (CI workflow ready — see `.github/workflows/macos.yml`)
-- [ ] Correlation lab round 2 — day‑scale lag slider + significance band
-- [ ] Climate & extreme‑weather event layer on the timeline
-- [ ] Headless CDP smoke suite for build verification
+- [x] Correlation lab round 2 — day‑scale lag slider + significance band
+- [x] Climate & extreme‑weather event layer on the timeline
+- [x] Headless CDP smoke suite for build verification
+- [x] Finding export — PNG with baked‑in caption + reproducible JSON sidecar
+- [x] Saved views — capture/restore range, magnitude, region, series and lag
+- [x] Data‑health badge — per‑feed availability and freshness
+- [x] Graph event markers with hover tooltips
+- [x] Trigger‑window engine — superposed epoch with 95 % shuffle envelope (moon, solar, quake, climate triggers)
+- [x] Region‑filtered quake series (coarse latitude/longitude boxes)
+- [x] Benjamini–Hochberg FDR across the scanned lags
+- [x] A/B earlier‑window lag comparison overlay
 
 ## 📄 License
 

@@ -13,13 +13,83 @@ const S = {
   counts: null,
   sunStrip: true,
   sunBars: false,
-  capitals: null
+  capitals: null,
+  climate: [],
+  health: {}
 };
 
 const $ = id => document.getElementById(id);
 const MONTH = 2629800000;
 
 function log(m) { console.log('[renderer] ' + m); }
+
+/* ---------- data source health ----------
+   Every feed records its last fetch outcome. Cached data is never hidden: a
+   failed refresh with usable cache is reported as unavailable (cached), not OK. */
+const FEED_LABELS = {
+  quakes: 'Quake archive (USGS / ISC)',
+  live24: 'Live quakes (USGS)',
+  gdacs: 'GDACS hazards',
+  flr: 'Solar flares (NASA DONKI)',
+  cme: 'CMEs (NASA DONKI)',
+  kp: 'Kp / F10.7 (GFZ)',
+  silso: 'Sunspots (SILSO)',
+  protons: 'Proton density (NOAA ACE)',
+  omni: 'OMNIWeb solar wind',
+  news: 'Live news feeds'
+};
+function markFeed(key, ok, detail) {
+  S.health[key] = { ok: !!ok, at: Date.now(), detail: String(detail || '') };
+  renderHealth();
+}
+function healthSummary() {
+  const keys = Object.keys(S.health);
+  const bad = keys.filter(k => !S.health[k].ok);
+  return { total: keys.length, bad, ok: keys.length - bad.length };
+}
+function renderHealth() {
+  const badge = $('dataHealth');
+  if (!badge) return;
+  const s = healthSummary();
+  badge.className = 'chip data-health' + (s.bad.length ? ' bad' : '');
+  if (!s.total) badge.textContent = 'data: checking…';
+  else if (s.bad.length) badge.textContent = 'data: ' + s.bad.length + ' unavailable';
+  else badge.textContent = 'data: ' + s.total + ' sources OK';
+  badge.title = (s.bad.length
+    ? s.bad.map(k => FEED_LABELS[k] || k).join(', ') + ' unavailable — click for details'
+    : 'Last fetch succeeded for every tracked source — click for details');
+  const pop = $('healthPop');
+  if (!pop) return;
+  const esc = v => String(v).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]);
+  const rows = Object.keys(FEED_LABELS).map(k => {
+    const h = S.health[k];
+    const state = !h ? '<span style="color:#6f7ba0">not loaded</span>'
+      : h.ok ? '<span style="color:#7ee0a8">OK</span>' : '<span style="color:#ff8a8a">unavailable</span>';
+    const age = h ? Math.max(0, Math.round((Date.now() - h.at) / 60000)) + ' min ago' : '—';
+    const detail = h && h.detail ? '<div class="hp-detail">' + esc(h.detail) + '</div>' : '';
+    return '<div class="hp-row"><span>' + FEED_LABELS[k] + '</span><span>' + state + ' · ' + age + '</span>' + detail + '</div>';
+  }).join('');
+  pop.innerHTML = '<div class="hp-head">Data source health <button id="healthClose">×</button></div>' + rows +
+    '<div class="hp-foot">Cached data keeps Chronos Terra working when a live feed is down. “OK” means the last fetch succeeded.</div>';
+  const close = $('healthClose');
+  if (close) close.addEventListener('click', () => { pop.classList.add('hidden'); badge.setAttribute('aria-expanded', 'false'); });
+}
+function wireHealth() {
+  const badge = $('dataHealth'), pop = $('healthPop');
+  if (!badge || !pop) return;
+  badge.addEventListener('click', e => {
+    e.stopPropagation();
+    const show = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !show);
+    badge.setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (show) renderHealth();
+  });
+  document.addEventListener('click', e => {
+    if (!pop.classList.contains('hidden') && !pop.contains(e.target) && e.target !== badge) pop.classList.add('hidden');
+  });
+  renderHealth();
+}
+
 function hideBoot() {
   const b = $('bootScreen');
   if (b && !b.classList.contains('hide')) { b.classList.add('hide'); setTimeout(() => b.remove(), 900); }
@@ -374,6 +444,29 @@ function drawTimeline() {
     }
   }
 
+  // GDACS climate / extreme-weather events on the same timeline.
+  if ($('lyClimate') && $('lyClimate').checked && S.climate.length) {
+    const buckets = new Map();
+    for (const f of S.climate) {
+      const p = f.properties;
+      if (!isFinite(p.t) || p.t < t0 || p.t > t1) continue;
+      const px = Math.round(x(p.t));
+      const b = buckets.get(px) || { n: 0, color: HZ_COLORS[p.k] || '#c0d0ff' };
+      b.n++;
+      buckets.set(px, b);
+    }
+    ctx.globalAlpha = 0.95;
+    for (const [px, b] of buckets) {
+      const h = Math.min(15, 5 + Math.log2(b.n + 1) * 3);
+      ctx.fillStyle = b.color;
+      ctx.fillRect(px - 1, mkTop + 15, 2, h);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(160,180,220,.85)';
+    ctx.font = '9px Segoe UI';
+    ctx.fillText('climate / weather', W - 94, mkTop + 23);
+  }
+
   // yearly sunspot total bars
   if (S.sunBars && SILSO && SILSO.length) {
     const start = Date.UTC(1970, 0, 1);
@@ -437,42 +530,97 @@ async function loadLive24() {
     const gj = await res.json();
     S.map.getSource('live24').setData(gj);
     log('live 24h loaded: ' + gj.features.length);
-  } catch (e) { console.error('live24 failed:', e.message || e); }
+    markFeed('live24', true, gj.features.length + ' events');
+  } catch (e) {
+    console.error('live24 failed:', e.message || e);
+    markFeed('live24', false, e.message || e);
+  }
 }
 
+const CLIMATE_TYPES = ['TC', 'FL', 'WF', 'DR'];
+const HZ_LABEL = { TC: 'cyclone', FL: 'flood', WF: 'wildfire', DR: 'drought', VO: 'volcano', EQ: 'quake' };
+function xmlDecode(s) {
+  return String(s || '').replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+}
+function gdacsTag(item, tag) {
+  const m = item.match(new RegExp('<' + tag + '\\b[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i'));
+  return xmlDecode(m ? m[1] : '');
+}
 function parseGdacs(xml) {
   const feats = [];
   const items = xml.split(/<item>/).slice(1);
   for (const it of items.slice(0, 250)) {
-    const title = (it.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || it.match(/<title>(.*?)<\/title>/) || [])[1] || '';
-    const link = (it.match(/<link>(.*?)<\/link>/) || [])[1] || '';
-    const lat = parseFloat((it.match(/<geo:lat>(-?[\d.]+)<\/geo:lat>/) || [])[1]);
-    const lon = parseFloat((it.match(/<geo:long>(-?[\d.]+)<\/geo:long>/) || [])[1]);
-    let k = 'OT';
+    const title = gdacsTag(it, 'title');
+    const link = gdacsTag(it, 'link');
+    const lat = parseFloat(gdacsTag(it, 'geo:lat'));
+    const lon = parseFloat(gdacsTag(it, 'geo:long'));
+    const explicit = gdacsTag(it, 'gdacs:eventtype').toUpperCase();
+    let k = explicit;
     const mType = link.match(/[?&]eventtype=([A-Z]+)/i);
-    if (mType) k = mType[1].toUpperCase();
-    else {
+    if (!k && mType) k = mType[1].toUpperCase();
+    if (!k) {
       const t2 = title.toUpperCase();
       if (/TROPICAL|CYCLONE|TC\b/.test(t2)) k = 'TC';
       else if (/FLOOD/.test(t2)) k = 'FL';
       else if (/WILDFIRE|FIRE/.test(t2)) k = 'WF';
       else if (/VOLCAN|ERUPTION/.test(t2)) k = 'VO';
       else if (/DROUGHT/.test(t2)) k = 'DR';
+      else k = 'OT';
     }
     if (!isFinite(lat) || !isFinite(lon)) continue;
-    feats.push({ type: 'Feature', properties: { title: title.trim(), k }, geometry: { type: 'Point', coordinates: [lon, lat] } });
+    const fromT = Date.parse(gdacsTag(it, 'gdacs:fromdate') || gdacsTag(it, 'pubDate'));
+    const toT = Date.parse(gdacsTag(it, 'gdacs:todate'));
+    feats.push({
+      type: 'Feature',
+      properties: {
+        title, k,
+        t: isFinite(fromT) ? fromT : null,
+        to: isFinite(toT) ? toT : (isFinite(fromT) ? fromT : null),
+        level: gdacsTag(it, 'gdacs:alertlevel'),
+        country: gdacsTag(it, 'gdacs:country'),
+        name: gdacsTag(it, 'gdacs:eventname'),
+        id: gdacsTag(it, 'guid'),
+        link
+      },
+      geometry: { type: 'Point', coordinates: [lon, lat] }
+    });
   }
   return feats;
 }
-
+function renderClimate() {
+  const box = $('climateBox');
+  if (!box) return;
+  const list = S.climate.slice().sort((a, b) => b.properties.t - a.properties.t);
+  if (!list.length) { box.textContent = 'no GDACS climate events loaded'; return; }
+  const counts = {};
+  for (const f of list) counts[f.properties.k] = (counts[f.properties.k] || 0) + 1;
+  const mix = CLIMATE_TYPES.filter(k => counts[k]).map(k => HZ_LABEL[k] + ' ' + counts[k]).join(' · ');
+  const p = list[0].properties;
+  const when = new Date(p.t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+  box.innerHTML = '<b>' + list.length + '</b> GDACS weather events in feed<br>' +
+    '<span style="color:' + (HZ_COLORS[p.k] || '#9fb4e0') + '">' + (HZ_LABEL[p.k] || p.k) + '</span> ' +
+    (p.name || p.title).slice(0, 74) + '<br>' +
+    '<span style="color:#55608a">' + when + (p.country ? ' · ' + p.country : '') +
+    (p.level ? ' · ' + p.level : '') + '</span><br>' +
+    '<span style="color:#55608a">' + mix + ' · timeline ticks</span>';
+}
 async function loadHazards() {
   try {
     const r = await window.ct.fetchText('https://www.gdacs.org/xml/rss.xml');
     if (!r.ok) throw new Error('status ' + r.status);
     const feats = parseGdacs(r.body);
     S.map.getSource('hazards').setData({ type: 'FeatureCollection', features: feats });
-    log('gdacs hazards loaded: ' + feats.length);
-  } catch (e) { console.error('gdacs failed:', e.message || e); }
+    S.climate = feats.filter(f => CLIMATE_TYPES.indexOf(f.properties.k) >= 0 && isFinite(f.properties.t));
+    renderClimate();
+    drawTimeline();
+    log('gdacs hazards loaded: ' + feats.length + ' (' + S.climate.length + ' climate/weather)');
+    markFeed('gdacs', true, feats.length + ' hazards · ' + S.climate.length + ' weather');
+  } catch (e) {
+    console.error('gdacs failed:', e.message || e);
+    markFeed('gdacs', false, e.message || e);
+  }
 }
 
 function wirePopups() {
@@ -913,12 +1061,14 @@ async function loadFlares() {
     }));
   }
 
+  let haveCached = false;
   try {
     const cached = await window.ct.donkiLoadCache('FLR');
     if (cached.ok && cached.data.length) {
+      haveCached = true;
       renderFlares(cached.data);
       log('flares loaded from cache: ' + cached.data.length);
-      if (!cached.stale) return;
+      if (!cached.stale) { markFeed('flr', true, 'cached · ' + cached.data.length + ' flares'); return; }
     }
     const r = await window.ct.donki(url);
     if (!r.ok) throw new Error('status ' + r.status);
@@ -926,9 +1076,17 @@ async function loadFlares() {
     await window.ct.donkiSaveCache('FLR', list);
     renderFlares(list);
     log('flares refreshed from API: ' + list.length);
+    markFeed('flr', true, list.length + ' flares · refreshed');
   } catch (e) {
-    console.error('flares failed:', e.message || e);
-    box.innerHTML = 'flare feed unavailable (' + (e.message || e) + ')';
+    const detail = e.message || e;
+    if (haveCached) {
+      log('flare refresh failed; keeping cached data: ' + detail);
+      markFeed('flr', false, 'using cache: ' + detail);
+    } else {
+      console.error('flares failed:', detail);
+      markFeed('flr', false, detail);
+      box.innerHTML = 'flare feed unavailable (' + detail + ')';
+    }
   }
 }
 
@@ -1037,7 +1195,11 @@ async function loadKp() {
     S.kpIdx = await window.ct.kpIndices();
     const n = S.kpIdx.kpM.filter(v => v != null).length;
     log('kp/f10.7 loaded: ' + n + ' months since 1970');
-  } catch (e) { console.error('kp failed:', e.message || e); }
+    markFeed('kp', true, n + ' months since 1970');
+  } catch (e) {
+    console.error('kp failed:', e.message || e);
+    markFeed('kp', false, e.message || e);
+  }
 }
 async function loadSilso() {  try {
     SILSO = await window.ct.silso();
@@ -1060,7 +1222,11 @@ async function loadSilso() {  try {
       'First correlation test — monthly sunspots vs quake count (' + A.length.toLocaleString() + ' months):<br>' +
       'Pearson r = <b>' + r.toFixed(3) + '</b> · exploratory, no lag applied';
     log('silso loaded: ' + SILSO.length + ' months, r=' + r.toFixed(3));
-  } catch (e) { console.error('silso failed:', e.message || e); }
+    markFeed('silso', true, SILSO.length + ' months');
+  } catch (e) {
+    console.error('silso failed:', e.message || e);
+    markFeed('silso', false, e.message || e);
+  }
 }
 
 /* ---------- correlation lab ---------- */
@@ -1254,12 +1420,10 @@ function computeCycles() {
 /* ---------- trigger-window (superposed epoch around event days) ---------- */
 function moonEvents(y0, y1) {
   const ev = [];
-  let t = NEWMOON_REF;
-  while (t < y1 * 864e5 + 2592e6) {
-    const yr = new Date(t).getUTCFullYear();
-    if (yr >= y0 && yr <= y1) ev.push(t);
-    t += SYNODIC_MS;
-  }
+  const start = Date.UTC(y0, 0, 1), end = Date.UTC(y1 + 1, 0, 1);
+  // Rewind the mean-lunation clock to the first new moon at/after the start year.
+  let t = NEWMOON_REF - Math.floor((NEWMOON_REF - start) / SYNODIC_MS) * SYNODIC_MS;
+  for (; t < end; t += SYNODIC_MS) if (t >= start) ev.push(t);
   return ev;
 }
 
@@ -1268,74 +1432,119 @@ function triggerDays(type) {
   if (type === 'newmoon') return moonEvents(y0, y1);
   if (type === 'fullmoon') return moonEvents(y0, y1).map(t => t + SYNODIC_MS / 2);
   if (type === 'kpstorm' && S.kpIdx) {
+    return S.kpIdx.dKp.filter(d => d.v >= 5).map(d => d.t);
+  }
+  if (type === 'fhigh' && S.kpIdx) {
+    return S.kpIdx.dF.filter(d => d.v >= 200).map(d => d.t);
+  }
+  if (type === 'xflare' && S.flareHistFC) {
+    return S.flareHistFC.filter(f => /^X/.test(f.properties.cls || ''))
+      .map(f => Date.parse(f.properties.t)).filter(isFinite);
+  }
+  if (type === 'cme') {
+    const rows = (S.cmeHistRows && S.cmeHistRows.length) ? S.cmeHistRows : (S.cmeRows || []);
+    return rows.filter(c => c.earth).map(c => Date.parse(c.t)).filter(isFinite);
+  }
+  if (type === 'm6' && S.q) {
     const ev = [];
-    for (const d of S.kpIdx.dKp) {
-      if (d.v >= 5) ev.push(d.t);
+    for (let i = 0; i < S.q.t.length; i++) {
+      if (S.q.m[i] >= 6) ev.push(S.q.t[i] * 1000);
     }
     return ev;
   }
-  if (type === 'fhigh' && S.kpIdx) {
-    const ev = [];
-    for (const d of S.kpIdx.dF) {
-      if (d.v >= 200) ev.push(d.t);
-    }
-    return ev;
+  if (type === 'climate' && S.climate) {
+    return S.climate.map(f => f.properties.t).filter(isFinite);
   }
   return [];
 }
 
 function computeTW() {
   const type = $('twTrig').value;
-  const W = parseInt($('twW').value, 10);
+  const W = parseInt($('twW').value, 10) || 7;
+  const magMin = parseFloat(($('twMag') || {}).value) || 4.5;
   $('twWv').textContent = W;
   const evDays = triggerDays(type);
-  if (!evDays.length) { $('twOut').textContent = 'no trigger events found'; return; }
-  const qTimes = S.q.t.map(ts => ts * 1000);
-  const bins = new Float64Array(2 * W + 1);
-  const DAY_MS = 864e5;
-  for (const ev of evDays) {
-    const lo = ev - W * DAY_MS, hi = ev + W * DAY_MS;
-    let i0 = 0, i1 = qTimes.length - 1;
-    while (i0 < qTimes.length && qTimes[i0] < lo) i0++;
-    while (i1 >= 0 && qTimes[i1] > hi) i1--;
-    for (let i = i0; i <= i1; i++) {
-      const off = Math.round((qTimes[i] - ev) / DAY_MS) + W;
-      if (off >= 0 && off <= 2 * W) bins[off]++;
-    }
+  log('trigger window: ' + type + ' · W=' + W + ' · M≥' + magMin + ' · ' + evDays.length + ' events');
+  if (!evDays.length) {
+    const hint = (type === 'xflare' || type === 'cme')
+      ? ' — open the CME panel and fetch DONKI history first'
+      : (type === 'kpstorm' || type === 'fhigh')
+        ? ' — Kp / F10.7 indices are still loading or unavailable'
+        : (type === 'climate')
+          ? ' — GDACS hazards are still loading or unavailable'
+          : '';
+    $('twOut').textContent = 'no trigger events found for this source' + hint;
+    return;
   }
-  const mean = (qTimes.length / S.q.t.length) * evDays.length / (2 * W + 1) * evDays.length;
-  const maxCount = Math.max(...bins) || 1;
-  let permMax = 0;
-  const PERM = 200;
-  for (let p = 0; p < PERM; p++) {
-    const pb = new Float64Array(2 * W + 1);
-    const shift = Math.floor(Math.random() * qTimes.length);
-    for (const ev of evDays) {
-      const lo = ev - W * DAY_MS, hi = ev + W * DAY_MS;
-      for (let i = 0; i < qTimes.length; i++) {
-        const adj = qTimes[(i + shift) % qTimes.length];
-        if (adj >= lo && adj <= hi) {
-          const off = Math.round((adj - ev) / DAY_MS) + W;
-          if (off >= 0 && off <= 2 * W) pb[off]++;
-        }
+  const t = S.q.t, m = S.q.m;
+  const DAY = 864e5;
+  const loT = S.tMin * 1000, hiT = S.tMax * 1000;
+  const span = Math.max(1, hiT - loT);
+  const magOk = i => m[i] != null && isFinite(m[i]) && m[i] >= magMin;
+  // Only the archive slice around each trigger is scanned, via binary search.
+  // Bins are full-day-wide and centred on each day offset (-W … +W), so the
+  // edges are not half-width artefacts of the ±W cutoff.
+  const accumulate = (events, target) => {
+    for (const ev of events) {
+      const lo = ev - (W + 0.5) * DAY, hi = ev + (W + 0.5) * DAY;
+      const a = lowerBound(t, Math.floor(lo / 1000));
+      const b = upperBound(t, Math.ceil(hi / 1000));
+      for (let i = a; i < b; i++) {
+        if (!magOk(i)) continue;
+        const off = Math.floor((t[i] * 1000 - ev) / DAY + W + 0.5);
+        if (off >= 0 && off <= 2 * W) target[off]++;
       }
     }
-    const pm = Math.max(...pb);
-    if (pm > permMax) permMax = pm;
+  };
+  const bins = new Float64Array(2 * W + 1);
+  accumulate(evDays, bins);
+  const n = evDays.length;
+  const perTrigger = Array.from(bins, v => v / n);
+  const avg = perTrigger.reduce((a, b) => a + b, 0) / perTrigger.length;
+  const pctDeviation = perTrigger.map(v => ((v - avg) / (avg || 1)) * 100);
+
+  // Null: shuffle trigger times uniformly across the archive, same magnitude cut.
+  // 200 shuffles of event times is O(events) per pass — no full-archive inner loop.
+  // Per-bin 2.5/97.5 percentiles give a genuine 95% envelope (min/max would be ~99.5%).
+  const PERM = 200;
+  const samples = [];
+  let maxShuffle = 0;
+  for (let p = 0; p < PERM; p++) {
+    const pb = new Float64Array(2 * W + 1);
+    accumulate(evDays.map(() => loT + Math.random() * span), pb);
+    const arr = Array.from(pb, v => v / n);
+    samples.push(arr);
+    let pm = 0;
+    for (let i = 0; i < arr.length; i++) if (arr[i] > pm) pm = arr[i];
+    if (pm > maxShuffle) maxShuffle = pm;
   }
-  const avgBin = bins.reduce((a, b) => a + b, 0) / bins.length;
-  const pctDeviation = bins.map(v => ((v - avgBin) / (avgBin || 1)) * 100);
-  TW_RESULT = { bins, evDays: evDays.length, W, pctDeviation, avgBin, permMax };
+  const loEnv = new Float64Array(2 * W + 1);
+  const hiEnv = new Float64Array(2 * W + 1);
+  for (let i = 0; i < 2 * W + 1; i++) {
+    const vals = samples.map(s => s[i]).sort((a, b) => a - b);
+    loEnv[i] = vals[Math.floor(0.025 * (PERM - 1))];
+    hiEnv[i] = vals[Math.floor(0.975 * (PERM - 1))];
+  }
+  const outside = perTrigger.filter((v, i) => v < loEnv[i] || v > hiEnv[i]).length;
+  TW_RESULT = {
+    bins: perTrigger, evDays: n, W, pctDeviation, avg,
+    loEnv: Array.from(loEnv), hiEnv: Array.from(hiEnv),
+    perm: PERM, outside, maxShuffle, type, magMin
+  };
   $('twCanvas').style.display = 'block';
   drawTW();
-  const peak = Math.max(...pctDeviation);
-  const trough = Math.min(...pctDeviation);
-  const sigBins = pctDeviation.filter((v, i) => Math.abs(v) > 20).length;
+  const peak = Math.max(...pctDeviation), trough = Math.min(...pctDeviation);
+  const expected = Math.round(0.05 * (2 * W + 1) * 10) / 10;
+  const moonNote = (type === 'newmoon' || type === 'fullmoon')
+    ? '<br>Moon phase uses a mean 29.53-day lunation (accurate to roughly ±0.5 day).' : '';
   $('twOut').innerHTML =
-    '<b>' + evDays.length + ' trigger events</b> · W=' + W + ' days' +
-    '<br>peak deviation: ' + peak.toFixed(1) + '% · trough: ' + trough.toFixed(1) + '%' +
-    '<br>bins >20% from mean: <b>' + sigBins + '</b> of ' + (2 * W + 1) +
-    '<br>max shuffle count: ' + permMax + ' · exploratory only';
+    '<b>' + n.toLocaleString() + ' triggers</b> · ' + type + ' · ±' + W + ' d · M≥' + magMin +
+    '<br>mean rate ' + avg.toFixed(2) + ' quakes/bin/trigger · peak ' + peak.toFixed(1) +
+    '% · trough ' + trough.toFixed(1) + '%' +
+    '<br>bins outside the 95% shuffle band: <b>' + outside + '</b> of ' + (2 * W + 1) +
+    ' (' + PERM + ' shuffles, ~' + expected + ' expected by chance)' +
+    '<br>max shuffled bin ' + maxShuffle.toFixed(2) + ' · multiple bins tested, exploratory only' +
+    moonNote;
 }
 
 function drawTW() {
@@ -1347,25 +1556,52 @@ function drawTW() {
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  const { bins, W: hw, pctDeviation } = TW_RESULT;
+  const { bins, W: hw, pctDeviation, avg, loEnv, hiEnv } = TW_RESULT;
   const bw = W / bins.length;
   const yMid = H / 2;
-  let mx = 5;
-  for (const v of pctDeviation) if (Math.abs(v) > mx) mx = Math.abs(v);
+  let twScale = 5;
+  const yOf = v => yMid - (v / twScale) * (H / 2 - 8);
+  // Envelope lives on the same per-trigger-rate scale as the bars.
+  const dev = v => ((v - avg) / (avg || 1)) * 100;
+  const loP = loEnv ? loEnv.map(dev) : null;
+  const hiP = hiEnv ? hiEnv.map(dev) : null;
+  const consider = v => { if (Math.abs(v) > twScale) twScale = Math.abs(v); };
+  for (const v of pctDeviation) consider(v);
+  if (loP) for (const v of loP) consider(v);
+  if (hiP) for (const v of hiP) consider(v);
+
+  // 95% shuffle envelope: shaded band the observed profile is tested against.
+  if (loP && hiP) {
+    ctx.fillStyle = 'rgba(150,175,235,.16)';
+    ctx.strokeStyle = 'rgba(150,175,235,.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bw / 2, yOf(hiP[0]));
+    for (let i = 1; i < hiP.length; i++) ctx.lineTo(i * bw + bw / 2, yOf(hiP[i]));
+    for (let i = hiP.length - 1; i >= 0; i--) ctx.lineTo(i * bw + bw / 2, yOf(loP[i]));
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+
   ctx.strokeStyle = '#33405e'; ctx.beginPath(); ctx.moveTo(0, yMid); ctx.lineTo(W, yMid); ctx.stroke();
   for (let i = 0; i < bins.length; i++) {
-    const hgt = (pctDeviation[i] / mx) * (H / 2 - 8);
-    ctx.fillStyle = pctDeviation[i] >= 0 ? 'rgba(94,168,255,.75)' : 'rgba(255,107,107,.7)';
+    const hgt = (pctDeviation[i] / twScale) * (H / 2 - 8);
+    const out = loP && (pctDeviation[i] < loP[i] || pctDeviation[i] > hiP[i]);
+    ctx.fillStyle = out ? '#ffd166' : (pctDeviation[i] >= 0 ? 'rgba(94,168,255,.75)' : 'rgba(255,107,107,.7)');
     ctx.fillRect(i * bw + 0.5, hgt >= 0 ? yMid - hgt : yMid, Math.max(1.5, bw - 1), Math.abs(hgt));
   }
   ctx.strokeStyle = '#ffb86b'; ctx.setLineDash([4, 3]);
   ctx.beginPath(); ctx.moveTo(0, yMid); ctx.lineTo(W, yMid); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle = '#55608a'; ctx.font = '9px Segoe UI';
   ctx.fillText('-' + hw + 'd', 3, H - 3); ctx.fillText('0', W / 2 - 2, H - 3); ctx.fillText('+' + hw + 'd', W - 30, H - 3);
+  ctx.fillStyle = '#8b96bd';
+  ctx.fillText('shaded = 95% shuffle envelope · amber = outside', 3, 10);
+  ctx.fillStyle = '#ffd166';
+  ctx.fillText('M≥' + TW_RESULT.magMin, W - 46, 10);
 }
 
 function wireTW() {
   $('twW').addEventListener('input', () => { $('twWv').textContent = $('twW').value; });
+  if ($('twMag')) $('twMag').addEventListener('change', () => { if (TW_RESULT) computeTW(); });
   $('twBtn').addEventListener('click', computeTW);
 }
 
@@ -1477,7 +1713,7 @@ async function loadCME() {
     if (cached.ok && cached.data.length) {
       renderCME(cached.data);
       log('CME loaded from cache: ' + cached.data.length);
-      if (!cached.stale) return;
+      if (!cached.stale) { markFeed('cme', true, 'cached · ' + cached.data.length + ' CMEs'); return; }
     }
     const r = await window.ct.donki(url);
     if (!r.ok) throw new Error('status ' + r.status);
@@ -1485,8 +1721,10 @@ async function loadCME() {
     await window.ct.donkiSaveCache('CME', list);
     renderCME(list);
     log('CME refreshed from API: ' + list.length);
+    markFeed('cme', true, list.length + ' CMEs · refreshed');
   } catch (e) {
     console.error('cme failed:', e.message || e);
+    markFeed('cme', false, e.message || e);
     box.innerHTML = 'CME feed unavailable (' + (e.message || e) + ')';
   }
 }
@@ -1668,6 +1906,8 @@ async function ensureMagnet() {
   if (magnetLoaded) return;
   magnetLoaded = true;
   await Promise.all(Object.values(MAGNET).map(m => loadMagnet(m.key)));
+  const loaded = Object.values(MAGNET).filter(m => MAGNETDATA[m.key]).length;
+  markFeed('omni', loaded > 0, loaded + ' / ' + Object.keys(MAGNET).length + ' series');
 }
 const GRAPH_SPAN_DAYS = { m30: 30, m3: 92, m6: 183, y1: 366, y3: 3 * 366, y5: 5 * 366, y10: 10 * 366, y25: 25 * 366 };
 const GRAPH_RANGE_DESC = {
@@ -1698,16 +1938,53 @@ function windowPoints(pts, t0, t1) {
   for (const p of pts) if (p.v != null && isFinite(p.v) && p.t >= t0 && p.t <= t1) out.push(p);
   return out;
 }
+// Region filters: coarse lat/lon rectangles. Deliberately simple and labelled
+// as rectangles — these are comparison slices, not tectonic-plate polygons.
+const Q_REGIONS = {
+  all: { label: 'All regions', boxes: null },
+  pacific: {
+    label: 'Pacific Rim (coarse)',
+    boxes: [
+      [30, 56, 128, 165],     // Japan / Kuril / Kamchatka
+      [48, 62, 165, 180],     // Kamchatka → Bering
+      [48, 62, -180, -170],   // western Aleutians
+      [48, 62, -170, -130],   // Alaska / eastern Aleutians
+      [-12, 22, 95, 145],     // Indonesia / Philippines
+      [-50, -25, 160, 180],   // New Zealand / Kermadec
+      [-30, -12, -180, -170], // Tonga / Fiji / Samoa
+      [5, 32, -118, -85],     // Mexico / Central America
+      [-46, -15, -78, -64]    // Peru / Chile
+    ]
+  },
+  americas: { label: 'Americas (coarse)', boxes: [[-60, 72, -170, -30]] },
+  eurasia: { label: 'Eurasia (coarse)', boxes: [[-10, 78, -10, 180]] },
+  south: { label: 'Southern hemisphere', boxes: [[-90, 0, -180, 180]] }
+};
+function graphRegion() {
+  const el = $('gRegion');
+  return el && Q_REGIONS[el.value] ? el.value : 'all';
+}
+function quakeInRegion(i, boxes) {
+  if (!boxes) return true;
+  const la = S.q.la[i], lo = S.q.lo[i];
+  for (let j = 0; j < boxes.length; j++) {
+    const b = boxes[j];
+    if (la >= b[0] && la <= b[1] && lo >= b[2] && lo <= b[3]) return true;
+  }
+  return false;
+}
 // Window-aware quake binning: binary-search the (sorted) archive slice for the window only,
 // so a 1Y/1D view never re-iterates the full 294k-quake archive.
-function windowedQuakes(t0, t1, bin, magMin) {
+function windowedQuakes(t0, t1, bin, magMin, regionKey) {
   const t = S.q.t, m = S.q.m;
+  const boxes = (Q_REGIONS[regionKey] || Q_REGIONS.all).boxes;
   const a = lowerBound(t, t0 / 1000);
   const b = upperBound(t, t1 / 1000);
   const bins = Math.max(1, Math.ceil((t1 - t0) / bin));
   const arr = new Float64Array(bins);
   for (let i = a; i < b; i++) {
     if (magMin && (m[i] == null || !isFinite(m[i]) || m[i] < magMin)) continue;
+    if (boxes && !quakeInRegion(i, boxes)) continue;
     const bi = Math.floor((t[i] * 1000 - t0) / bin);
     if (bi >= 0 && bi < bins) arr[bi]++;
   }
@@ -1732,7 +2009,7 @@ function windowedEruptions(t0, t1, bin) {
 }
 function buildGraphSeries(s, t0, t1, bin) {
   switch (s.id) {
-    case 'gq': return S.q ? windowedQuakes(t0, t1, bin, graphMagMin()) : [];
+    case 'gq': return S.q ? windowedQuakes(t0, t1, bin, graphMagMin(), graphRegion()) : [];
     case 'gve': return windowedEruptions(t0, t1, bin);
     case 'gsn': return SILSO ? windowPoints(SILSO.map(r => ({ t: r.t, v: r.sn })), t0, t1) : [];
     case 'gkp': return S.kpIdx ? windowPoints(idxToPts(S.kpIdx.kpM, S.kpIdx.start), t0, t1) : [];
@@ -1777,11 +2054,13 @@ async function loadProtons(force) {
     protonPts = pts;
     protonFetched = Date.now();
     log('proton density (ACE): ' + pts.length + ' pts, ' + (pts.length ? new Date(pts[pts.length - 1].t).toISOString() : '') + ' latest');
+    markFeed('protons', pts.length > 0, pts.length + ' points');
     if (!$('gpd')) return;
     $('gpd').disabled = !pts.length;
     if (!pts.length) { $('gpd').checked = false; }
   } catch (e) {
     log('proton density unavailable: ' + (e && e.message || e));
+    markFeed('protons', false, e && e.message || e);
   }
 }
 
@@ -1947,6 +2226,77 @@ function updateGraphWinTip() {
   const newest = t1 >= S.tMax * 1000 - 2 * 864e5;
   tip.innerHTML = '<b>' + a + ' → ' + b + '</b>' + (newest ? ' · latest' : ' · earlier window') + ' — ' + desc;
 }
+/* ---------- event markers on the graph ----------
+   Built once per window load (not per mousemove) so hover repaints stay cheap. */
+let graphEventCache = [];
+let graphEventHits = [];
+function buildGraphEvents(t0, t1) {
+  const out = [];
+  const add = (t, label, color, pri) => {
+    if (!isFinite(t) || t < t0 || t > t1) return;
+    out.push({ t, label: String(label || ''), color, pri });
+  };
+  if (S.flareHistFC) for (const f of S.flareHistFC) {
+    add(Date.parse(f.properties.t), f.properties.label || 'solar flare', '#ff8c1a', 4);
+  }
+  if (S.cmeHistFC) for (const f of S.cmeHistFC) {
+    add(f.properties.t, 'CME · ' + new Date(f.properties.t).toLocaleDateString('en-AU'), '#5ed6c0', 3);
+  }
+  if (S.climate) for (const f of S.climate) {
+    const p = f.properties;
+    add(p.t, (HZ_LABEL[p.k] || p.k) + ' · ' + String(p.name || p.title || '').slice(0, 46),
+        HZ_COLORS[p.k] || '#c0d0ff', 2);
+  }
+  if (S.q) {
+    const lo = lowerBound(S.q.t, Math.floor(t0 / 1000));
+    const hi = upperBound(S.q.t, Math.ceil(t1 / 1000));
+    const boxes = (Q_REGIONS[graphRegion()] || Q_REGIONS.all).boxes;
+    let top = [];
+    for (let i = lo; i < hi; i++) {
+      const m = S.q.m[i];
+      if (!isFinite(m)) continue;
+      if (boxes && !quakeInRegion(i, boxes)) continue;
+      if (top.length < 8 || m > top[0].m) {
+        top.push({ m, t: S.q.t[i] * 1000 });
+        top.sort((a, b) => a.m - b.m);
+        if (top.length > 8) top.shift();
+      }
+    }
+    for (const q of top) add(q.t, 'M' + q.m.toFixed(1) + ' quake', '#ff6b6b', 1);
+  }
+  out.sort((a, b) => a.t - b.t);
+  graphEventCache = out;
+}
+function drawGraphEvents(ctx, W, H, t0, t1, padL, padR, padT, padB) {
+  graphEventHits = [];
+  const cb = $('gEvents');
+  if (!cb || !cb.checked || !graphEventCache.length) return;
+  const x = t => padL + (t - t0) / (t1 - t0) * (W - padL - padR);
+  const buckets = new Map();
+  for (const ev of graphEventCache) {
+    const px = Math.round(x(ev.t));
+    if (px < padL || px > W - padR) continue;
+    const b = buckets.get(px) || { ev, n: 0 };
+    b.n++;
+    if (ev.pri > b.ev.pri) b.ev = ev;
+    buckets.set(px, b);
+  }
+  ctx.save();
+  for (const [px, b] of buckets) {
+    ctx.strokeStyle = b.ev.color;
+    ctx.globalAlpha = 0.28;
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.moveTo(px + 0.5, padT); ctx.lineTo(px + 0.5, H - padB); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = b.ev.color;
+    ctx.beginPath();
+    ctx.moveTo(px - 3, padT - 5); ctx.lineTo(px + 3, padT - 5); ctx.lineTo(px, padT + 1);
+    ctx.closePath(); ctx.fill();
+    graphEventHits.push({ x: px, label: b.ev.label + (b.n > 1 ? ' (+' + (b.n - 1) + ' more)' : ''), color: b.ev.color });
+  }
+  ctx.restore();
+}
 function drawGraph() {
   if (!S.q) return;
   const cv = $('graphCanvas');
@@ -1967,6 +2317,7 @@ function drawGraph() {
     const pts = graphSeriesCache[s.id];
     if (pts) drawGraphLine(ctx, pts, t0, t1, W, H, padL, padR, padT, padB, s.color);
   }
+  drawGraphEvents(ctx, W, H, t0, t1, padL, padR, padT, padB);
   drawGraphCrosshair(ctx, W, H, t0, t1, padL, padR, padT, padB, active);
   graphDrawn = true;
 }
@@ -1989,6 +2340,10 @@ function drawGraphCrosshair(ctx, W, H, t0, t1, padL, padR, padT, padB, active) {
       spanDays <= 40
         ? { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }
         : { day: 'numeric', month: 'short', year: 'numeric' });
+    let evHit = null;
+    for (const h of graphEventHits) if (Math.abs(h.x - graphHoverX) <= 5) { evHit = h; break; }
+    const evHtml = evHit
+      ? '<span style="color:' + evHit.color + '">◆ ' + escapeHtml(evHit.label) + '</span> · ' : '';
     const tips = [];
     for (const s of active) {
       const pts = graphSeriesCache[s.id];
@@ -2001,10 +2356,11 @@ function drawGraphCrosshair(ctx, W, H, t0, t1, padL, padR, padT, padB, active) {
       tips.push('<span style="color:' + s.color + '">●</span> ' + val + unit + '<span style="color:#8b96bd">' + tagTxt + '</span>');
       s.hoverVal = val + unit;
     }
-    $('graphTip').innerHTML = '<b>' + dateStr + '</b> · ' + tips.join(' · ');
+    $('graphTip').innerHTML = '<b>' + dateStr + '</b> · ' + evHtml + tips.join(' · ');
     if (tag && graphMouse) {
       tag.classList.remove('hidden');
-      tag.innerHTML = '<span class="d">' + dateStr + '</span>' + tips.map(t => '<span class="sep">|</span>' + t).join('');
+      tag.innerHTML = '<span class="d">' + dateStr + '</span>' + (evHit ? '<span class="sep">|</span>' + evHtml : '') +
+        tips.map(t => '<span class="sep">|</span>' + t).join('');
       const st = $('graphStage'), r = st.getBoundingClientRect();
       let left = graphMouse.x - r.left + 14;
       let top = graphMouse.y - r.top - tag.offsetHeight - 12;
@@ -2067,7 +2423,8 @@ async function loadGraphSeries() {
     tip.classList.remove('loading');
     drawGraph();   // full repaint: axes + y-ruler + all series + crosshair, so the ruler reflects loaded data
     graphDrawn = true;
-    graphCur = { t0, t1, bin, sel: $('gRange').value, mag: graphMagMin() };
+    graphCur = { t0, t1, bin, sel: $('gRange').value, mag: graphMagMin(), region: graphRegion() };
+    buildGraphEvents(t0, t1);
     updateGraphPager();
     renderGraphEnrich(t0, t1, active, bin);
     updateGraphDebug(W, H, t0, t1);
@@ -2171,6 +2528,7 @@ async function loadRss(force) {
   if (!document.getElementById('rssFeeds')) return;
   const now = Date.now();
   if (!force && rssFetched && now - rssFetched < 15 * 60 * 1000) return;
+  const feedFails = [];
   for (const f of RSS_FEEDS) {
     const feedEl = document.getElementById('rss-' + f.key);
     const meta = feedEl && feedEl.querySelector('.rss-meta');
@@ -2181,10 +2539,12 @@ async function loadRss(force) {
       renderRssFeed(f, parseFeedXml(r.body), null);
     } catch (e) {
       log('rss ' + f.key + ' failed: ' + (e && e.message || e));
+      feedFails.push(f.key);
       renderRssFeed(f, [], String(e && e.message || e));
     }
   }
   rssFetched = Date.now();
+  markFeed('news', !feedFails.length, feedFails.length ? 'failed: ' + feedFails.join(', ') : RSS_FEEDS.length + ' feeds');
 }
 function wireRSS() {
   const box = document.getElementById('rssFeeds');
@@ -2201,11 +2561,15 @@ function wireRSS() {
 }
 
 function wireGraphs() {
+  wireViews();
+  $('graphExport').addEventListener('click', exportFinding);
   $('graphsClose').addEventListener('click', () => setView('globe'));
   $('papersClose').addEventListener('click', () => setView('globe'));
   $('moonClose').addEventListener('click', () => setView('globe'));
   [...document.querySelectorAll('#gSeries input')].forEach(cb => cb.addEventListener('change', loadGraphSeries));
   $('gMag').addEventListener('change', loadGraphSeries);
+  $('gRegion').addEventListener('change', loadGraphSeries);
+  $('gEvents').addEventListener('change', drawGraph);
   $('gRange').addEventListener('change', () => { graphWinEnd = null; updateGraphWinTip(); loadGraphSeries(); });
   $('gPrev').addEventListener('click', () => graphStep(-1));
   $('gNext').addEventListener('click', () => graphStep(1));
@@ -2341,13 +2705,17 @@ function pearsonXY(aV, bV, aT, bT, lagMs) {
   let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
   for (let i = 0; i < aT.length; i++) {
     const target = aT[i] + lagMs;
-    // find b point nearest target
-    let best = -1, bd = Infinity;
-    for (let j = 0; j < bT.length; j++) {
-      const d = Math.abs(bT[j] - target);
-      if (d < bd) { bd = d; best = j; }
+    // bT is sorted; binary-search the nearest point instead of scanning all of it.
+    let lo = 0, hi = bT.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (bT[mid] < target) lo = mid + 1; else hi = mid;
     }
-    if (best < 0) continue;
+    let best = lo, bd = Math.abs(bT[lo] - target);
+    if (lo > 0) {
+      const prevD = Math.abs(bT[lo - 1] - target);
+      if (prevD < bd) { best = lo - 1; bd = prevD; }
+    }
     const x = aV[i], y = bV[best];
     if (!isFinite(x) || !isFinite(y) || x == null || y == null) continue;
     n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
@@ -2409,55 +2777,202 @@ function enrichCorr(t0, t1, active, bin) {
     html += '<div class="row"><span>' + suit[i].label + ' ↔ ' + suit[j].label + '</span><span>r = <b>' + res.r.toFixed(3) + '</b> (n=' + res.n + ')</span></div>';
   }
   if (!nPairs) html += '<div class="row"><span>Not enough aligned points</span><span>—</span></div>';
-  html += enrichLagStrip(pairs, bin || 864e5);
+  html += enrichLagStrip(pairs, bin || 864e5, t0, t1);
   return html;
 }
-function enrichLagStrip(pairs, bin) {
-  // Scan a small window of lags (the "lag engine" from the spec: time-shift one
-  // series against another) on the strongest pair. EXPLORATORY - aligned to the
-  // Marchitelli ~1-day proton-density effect when the bin is daily.
-  const isMo = bin >= 26 * 864e5;
-  const unit = isMo ? 'mo' : (bin <= 3600e3 ? 'h' : 'd');
-  const maxLag = isMo ? 4 : 6;
-  const lagMs = bin <= 3600e3 ? 3600e3 : bin;
-  let best = null, bestAbs = 0;
-  for (const pr of pairs) {
-    const aP = graphSeriesCache[pr.a.id], bP = graphSeriesCache[pr.b.id];
-    if (!aP || !bP || aP.length < 10 || bP.length < 10) continue;
-    // bound the scan to ~1k points so 25Y windows stay instant
-    const strideA = Math.ceil(aP.length / 1000), strideB = Math.ceil(bP.length / 1000);
-    const aV = [], bV = [], aT = [], bT = [];
-    for (let i = 0; i < aP.length; i += strideA) { aV.push(aP[i].v); aT.push(aP[i].t); }
-    for (let i = 0; i < bP.length; i += strideB) { bV.push(bP[i].v); bT.push(bP[i].t); }
-    for (let l = -maxLag; l <= maxLag; l++) {
-      const r = pearsonXY(aV, bV, aT, bT, l * lagMs);
-      if (!r) continue;
-      const av = Math.abs(r.r);
-      if (l && av > bestAbs) { bestAbs = av; best = { a: pr.a, b: pr.b, l, r: r.r, n: r.n, val: r }; }
-    }
+let lagScanSteps = 6;
+let lagAB = false;
+let lastLagResult = null;
+function lagCriticalR(n) {
+  // 95% two-sided null band from Fisher z: r0 = tanh(1.96 / sqrt(n-3)).
+  if (!(n > 3)) return 1;
+  return Math.min(0.999, Math.tanh(1.96 / Math.sqrt(n - 3)));
+}
+// Complementary error function (Numerical Recipes approximation, |err| < 1.2e-7).
+function erfc(x) {
+  const z = Math.abs(x);
+  const t = 1 / (1 + 0.5 * z);
+  const ans = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 +
+    t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 +
+    t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  return x >= 0 ? ans : 2 - ans;
+}
+// Two-sided p for a Pearson correlation: Fisher z = atanh(r)·√(n−3), normal tail.
+function fisherP(r, n) {
+  if (!isFinite(r) || !(n > 3)) return 1;
+  const rr = Math.max(-0.999999, Math.min(0.999999, r));
+  const z = Math.abs(Math.atanh(rr)) * Math.sqrt(n - 3);
+  return Math.max(0, Math.min(1, erfc(z / Math.SQRT2)));
+}
+// Benjamini–Hochberg step-up FDR over the scanned lags. Returns q-values aligned
+// with the input order plus the largest rejected rank at the given alpha.
+function benjaminiHochberg(pvals, alpha) {
+  const a = alpha == null ? 0.05 : alpha;
+  const m = pvals.length;
+  const q = new Array(m).fill(1);
+  if (!m) return { q, bhM: 0, bhK: 0, bhThreshold: 0, alpha: a };
+  const idx = pvals.map((p, i) => i).sort((i, j) => pvals[i] - pvals[j]);
+  let prev = 1;
+  for (let k = m - 1; k >= 0; k--) {
+    const i = idx[k];
+    const val = Math.min(prev, (pvals[i] * m) / (k + 1));
+    q[i] = val;
+    prev = val;
   }
-  if (!best) return '';
-  // recompute the strip values for the best pair (sampled) so bars have heights
-  const aP = graphSeriesCache[best.a.id], bP = graphSeriesCache[best.b.id];
+  let bhM = 0;
+  for (let k = 0; k < m; k++) if (pvals[idx[k]] <= ((k + 1) / m) * a) bhM = k + 1;
+  return { q, bhM, bhK: m, bhThreshold: bhM ? (bhM / m) * a : 0, alpha: a };
+}
+// Bound each series to ~1k points so 25Y windows stay instant even at 30-day lags.
+function sampleSeriesPair(aP, bP) {
   const strideA = Math.ceil(aP.length / 1000), strideB = Math.ceil(bP.length / 1000);
   const aV = [], bV = [], aT = [], bT = [];
   for (let i = 0; i < aP.length; i += strideA) { aV.push(aP[i].v); aT.push(aP[i].t); }
   for (let i = 0; i < bP.length; i += strideB) { bV.push(bP[i].v); bT.push(bP[i].t); }
-  let stripHtml = '<div class="lagstrip">';
+  return { aV, bV, aT, bT };
+}
+function peakLag(smp, maxLag, lagMs) {
+  let pk = null;
   for (let l = -maxLag; l <= maxLag; l++) {
-    const rr = pearsonXY(aV, bV, aT, bT, l * lagMs);
-    const v = rr ? rr.r : 0;
-    const h = Math.max(6, Math.round(Math.abs(v) * 34));
-    const col = v >= 0 ? 'rgba(94,168,255,.85)' : 'rgba(255,107,107,.85)';
-    const hl = l === best.l ? ' style="outline:2px solid #ffd166"' : '';
-    stripHtml += '<i' + hl + ' style="height:' + h + 'px;background:' + col + '" title="' + (l >= 0 ? '+' : '−') + Math.abs(l) + ' ' + unit + ': r=' + (rr ? rr.r.toFixed(3) : '-') + '"></i>';
+    if (!l) continue;   // 0-lag is the cross-correlation panel, not part of the scan
+    const res = pearsonXY(smp.aV, smp.bV, smp.aT, smp.bT, l * lagMs);
+    if (!res) continue;
+    if (!pk || Math.abs(res.r) > Math.abs(pk.r)) pk = { l, r: res.r, n: res.n };
+  }
+  return pk;
+}
+function enrichLagStrip(pairs, bin, t0, t1) {
+  // Scan a user-sized window of lags (the "lag engine": time-shift one series
+  // against another) on the strongest pair. EXPLORATORY - aligned to the
+  // Marchitelli ~1-day proton-density effect when the bin is daily.
+  const isMo = bin >= 26 * 864e5;
+  const unit = isMo ? 'mo' : (bin <= 3600e3 ? 'h' : 'd');
+  const lagMs = bin <= 3600e3 ? 3600e3 : bin;
+  const cap = unit === 'h' ? 24 : (unit === 'mo' ? 12 : 30);
+  const maxLag = Math.max(1, Math.min(cap, lagScanSteps | 0));
+
+  const sampled = [];
+  for (const pr of pairs) {
+    const aP = graphSeriesCache[pr.a.id], bP = graphSeriesCache[pr.b.id];
+    if (!aP || !bP || aP.length < 10 || bP.length < 10) continue;
+    sampled.push(Object.assign({ a: pr.a, b: pr.b }, sampleSeriesPair(aP, bP)));
+  }
+  let best = null;
+  for (const smp of sampled) {
+    const pk = peakLag(smp, maxLag, lagMs);
+    if (!pk) continue;
+    if (!best || Math.abs(pk.r) > Math.abs(best.r)) {
+      best = { a: smp.a, b: smp.b, aV: smp.aV, bV: smp.bV, aT: smp.aT, bT: smp.bT,
+               l: pk.l, r: pk.r, n: pk.n };
+    }
+  }
+  if (!best) { lastLagResult = null; return ''; }
+
+  const rows = [];
+  for (let l = -maxLag; l <= maxLag; l++) {
+    const res = pearsonXY(best.aV, best.bV, best.aT, best.bT, l * lagMs);
+    rows.push({ l, r: res ? res.r : 0, n: res ? res.n : 0 });
+  }
+  let minN = Infinity;
+  for (const row of rows) if (row.n) minN = Math.min(minN, row.n);
+  const crit = lagCriticalR(isFinite(minN) ? minN : best.n);
+  const peakSig = Math.abs(best.r) >= crit;
+
+  // Multiple-testing correction: only the non-zero lags are scanned, so that is
+  // the family. BH q-values are stored on each row and used for the tooltips.
+  const tested = rows.filter(row => row.l !== 0 && row.n > 3 && isFinite(row.r));
+  const pvals = tested.map(row => fisherP(row.r, row.n));
+  const bh = benjaminiHochberg(pvals, 0.05);
+  tested.forEach((row, i) => {
+    row.p = pvals[i];
+    row.q = bh.q[i];
+    row.bhSig = row.q <= bh.alpha;
+  });
+  const peakRow = rows.find(row => row.l === best.l) || null;
+  const peakP = peakRow && peakRow.p != null ? peakRow.p : fisherP(best.r, best.n);
+  const peakQ = peakRow && peakRow.q != null ? peakRow.q : 1;
+  const peakBhSig = peakRow ? !!peakRow.bhSig : false;
+
+  // A/B earlier window: rebuild the immediately preceding equal-width window and
+  // ghost its lag profile behind the current bars. Cheap enough at bin resolution.
+  const span = (t0 != null && t1 != null) ? t1 - t0 : 0;
+  const overlay = lagAB && span > 0;
+  let prevPeaks = null, prevRows = null, prevBest = null;
+  if (overlay) {
+    prevPeaks = [];
+    for (const pr of pairs) {
+      const aP = buildGraphSeries(pr.a, t0 - span, t0, bin);
+      const bP = buildGraphSeries(pr.b, t0 - span, t0, bin);
+      if (!aP || !bP || aP.length < 10 || bP.length < 10) continue;
+      const smp = sampleSeriesPair(aP, bP);
+      const pk = peakLag(smp, maxLag, lagMs);
+      if (pk) prevPeaks.push({ a: pr.a, b: pr.b, l: pk.l, r: pk.r, n: pk.n, smp });
+    }
+    prevBest = prevPeaks.find(p => p.a.id === best.a.id && p.b.id === best.b.id) || null;
+    if (prevBest) {
+      prevRows = [];
+      for (let l = -maxLag; l <= maxLag; l++) {
+        const res = pearsonXY(prevBest.smp.aV, prevBest.smp.bV, prevBest.smp.aT, prevBest.smp.bT, l * lagMs);
+        prevRows.push(res ? res.r : 0);
+      }
+    }
+  }
+
+  const slider = '<div class="row lagctl"><span>Lag window</span><span><input type="range" id="lagSteps" min="1" max="' + cap + '" value="' + maxLag + '"><b id="lagStepsLabel">±' + maxLag + ' ' + unit + '</b></span></div>';
+  const abBox = '<label class="lagab tt" data-tip="Overlay the immediately preceding window of equal width. Ghost bars show that earlier window so you can judge whether a lag peak is stable or a one-window artefact."><input type="checkbox" id="lagAB"' + (lagAB ? ' checked' : '') + '> A/B previous window</label>';
+  let stripHtml = '<div class="lagstrip"><span class="lagband" style="bottom:' + (crit * 34).toFixed(1) + 'px" title="95% null band: |r| &lt; ' + crit.toFixed(3) + '"></span>';
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const h = Math.max(4, Math.round(Math.abs(row.r) * 34));
+    const col = row.r >= 0 ? 'rgba(94,168,255,.85)' : 'rgba(255,107,107,.85)';
+    let sig;
+    if (!row.n) sig = 'no aligned points';
+    else if (row.l === 0) sig = (Math.abs(row.r) >= crit ? 'outside 95% band' : 'within 95% null band') + ' · not in lag scan';
+    else if (row.bhSig) sig = 'BH-significant at q ≤ ' + bh.alpha + ' (q=' + row.q.toFixed(3) + ')';
+    else sig = 'not BH-significant (q=' + (row.q == null ? '–' : row.q.toFixed(3)) + ')';
+    const pTxt = row.p == null ? '–' : (row.p < 1e-4 ? row.p.toExponential(1) : row.p.toFixed(3));
+    const hl = row.l === best.l ? ' style="outline:2px solid #ffd166;outline-offset:1px"' : '';
+    let ghost = '';
+    if (prevRows) {
+      const gh = Math.max(2, Math.round(Math.abs(prevRows[i]) * 34));
+      ghost = '<span class="lagprev" style="height:' + gh + 'px" title="previous window: r=' + prevRows[i].toFixed(3) + '"></span>';
+    }
+    stripHtml += '<span class="lagslot"' + hl + '>' + ghost +
+      '<i style="height:' + h + 'px;background:' + col + '" title="' + (row.l >= 0 ? '+' : '−') + Math.abs(row.l) + ' ' + unit + ': r=' + (row.n ? row.r.toFixed(3) : '-') + ' · p=' + pTxt + ' · ' + sig + '"></i></span>';
   }
   stripHtml += '</div>';
   const lagTxt = (best.l >= 0 ? '+' : '−') + Math.abs(best.l) + ' ' + unit;
   const dirTxt = best.l === 0 ? '' : (best.l < 0 ? ' earlier' : ' later');
   const theo = unit === 'd' ? ' Marchitelli et al. report a ≈1-day proton-density lead — this is the same scale.' : '';
-  return '<div class="g-note"><b>Lag scan · ' + unit + '</b> — strongest shift is <b>' + lagTxt + '</b> (' + best.a.label + ' ↔ ' + best.b.label + '), r = <b>' + best.r.toFixed(3) + '</b> when the second series sits ' + dirTxt + ' (n=' + best.n + ').' + theo + '</div>' + stripHtml +
-    '<div class="lagcap"><span>−' + maxLag + ' ' + unit + '</span><span style="color:#ffd166">peak ' + lagTxt + '</span><span>+' + maxLag + ' ' + unit + '</span></div>';
+  let abTxt = '';
+  if (overlay) {
+    if (prevBest) {
+      const pLag = (prevBest.l >= 0 ? '+' : '−') + Math.abs(prevBest.l) + ' ' + unit;
+      const shift = best.l - prevBest.l;
+      const verdict = shift === 0 ? 'peak stable' : (Math.abs(shift) <= 1 ? 'peak within ±1 ' + unit : 'peak moved by ' + Math.abs(shift) + ' ' + unit);
+      abTxt = '<div class="g-note">A/B previous window (' + new Date(t0 - span).toISOString().slice(0, 10) + ' → ' + new Date(t0).toISOString().slice(0, 10) + '): peak ' + pLag + ' at r = <b>' + prevBest.r.toFixed(3) + '</b> (n=' + prevBest.n + ') → <b>' + verdict + '</b>.</div>';
+    } else {
+      abTxt = '<div class="g-note">A/B previous window: not enough overlap in the earlier window to compare.</div>';
+    }
+  }
+  lastLagResult = {
+    lagUnits: best.l, unit, lagMs, label: lagTxt, r: best.r, n: best.n,
+    pair: [best.a.label, best.b.label], steps: maxLag, crit95: crit, peakSig,
+    p: peakP, q: peakQ, bhSig: peakBhSig,
+    bhM: bh.bhM, bhK: bh.bhK, bhThreshold: bh.bhThreshold,
+    ab: overlay ? {
+      prevLag: prevBest ? prevBest.l : null,
+      prevR: prevBest ? prevBest.r : null,
+      shift: prevBest ? best.l - prevBest.l : null,
+      stable: prevBest ? (best.l === prevBest.l ? 'same lag' : (Math.abs(best.l - prevBest.l) <= 1 ? 'within 1 ' + unit : 'moved')) : 'no data'
+    } : null
+  };
+  return slider + abBox +
+    '<div class="g-note"><b>Lag scan · ' + unit + '</b> — strongest shift is <b>' + lagTxt + '</b> (' + best.a.label + ' ↔ ' + best.b.label + '), r = <b>' + best.r.toFixed(3) + '</b> when the second series sits ' + dirTxt + ' (n=' + best.n + ').' + theo + '</div>' +
+    stripHtml +
+    '<div class="lagcap"><span>−' + maxLag + ' ' + unit + '</span><span style="color:#ffd166">peak ' + lagTxt + (peakSig ? '' : ' (within band)') + '</span><span>+' + maxLag + ' ' + unit + '</span></div>' +
+    abTxt +
+    '<div class="g-note">Dashed line = approximate 95% null band, |r| &lt; <b>' + crit.toFixed(3) + '</b> (Fisher z, n≥' + (isFinite(minN) ? minN : best.n) + '). Benjamini–Hochberg FDR across the <b>' + bh.bhK + '</b> scanned non-zero lags: <b>' + bh.bhM + '</b> pass q ≤ ' + bh.alpha + ' (threshold p ≤ ' + (bh.bhThreshold ? bh.bhThreshold.toExponential(2) : '–') + '); peak q = <b>' + (peakQ < 1e-4 ? peakQ.toExponential(2) : peakQ.toFixed(3)) + '</b>' + (peakBhSig ? ' · survives correction' : ' · does not survive correction') + '. Still exploratory.</div>';
 }
 function enrichNotable(t0, t1) {
   // largest quakes in window + biggest sunspot month + earth-directed CME arrivals
@@ -2525,9 +3040,11 @@ function enrichCharging(t0, t1, active) {
   html += '<div class="g-note">Cumulative sum of the selected space-weather stress proxy over the window. The idea is to look for quake clusters after rising cumulative charge — a “threshold/charging” narrative. This is <b>exploratory</b>: integration order and units make it a heuristic, not a validated mechanism (see Love &amp; Thomas 2013 for the null result).</div>';
   return html;
 }
+let lastEnrichArgs = null;
 function renderGraphEnrich(t0, t1, active, bin) {
   const box = $('graphEnrich');
   if (!box) return;
+  lastEnrichArgs = { t0, t1, active, bin };
   let html = '<div class="g-blk">' + enrichStats(active) + '</div>';
   html += '<div class="g-blk">' + enrichMagDist(t0, t1) + '</div>';
   html += '<div class="g-blk">' + enrichCorr(t0, t1, active, bin) + '</div>';
@@ -2538,6 +3055,202 @@ function renderGraphEnrich(t0, t1, active, bin) {
     '<div class="row"><span>What we show here</span><span><b>Historical proton density</b> (bundled OMNI2 daily, 1970→now, <b>·theory</b>) plus <b>IMF Bz / |B|, SW pressure, Dst and E-field</b>, all from the same OMNIWeb feed. The live 24 h ACE series is the magenta “proton density (live)”. All exploratory, not a verified mechanism</span></div>' +
     '<div class="g-note">Try: enable <b>proton density</b> + <b>IMF Bz</b> + <b>quakes (M≥6)</b> + <b>Kp</b>, then page the 3Y–25Y ranges and look at the 0-lag cross-correlation, the day-lag scan strip, and the cumulative “charging” bar. Use the <b>data ▾</b> dialog to refresh any of these series individually.</div></div>';
   box.innerHTML = html;
+  const slider = $('lagSteps');
+  if (slider) {
+    slider.addEventListener('change', () => {
+      lagScanSteps = Math.max(1, Math.min(+slider.max || 30, +slider.value || 6));
+      if (lastEnrichArgs) {
+        renderGraphEnrich(lastEnrichArgs.t0, lastEnrichArgs.t1, lastEnrichArgs.active, lastEnrichArgs.bin);
+      }
+    });
+  }
+  const ab = $('lagAB');
+  if (ab) {
+    ab.addEventListener('change', () => {
+      lagAB = ab.checked;
+      if (lastEnrichArgs) {
+        renderGraphEnrich(lastEnrichArgs.t0, lastEnrichArgs.t1, lastEnrichArgs.active, lastEnrichArgs.bin);
+      }
+    });
+  }
+}
+
+/* ---------- export a finding ----------
+   One PNG with the caption baked in, plus a JSON sidecar capturing the exact
+   window, series, lag peak and data-health state so a result is reproducible. */
+function findingMeta() {
+  const g = graphCur || {};
+  const active = GRAPH_SERIES.filter(s => $(s.id) && $(s.id).checked);
+  const series = active.map(s => ({
+    id: s.id, label: s.label, points: (graphSeriesCache[s.id] || []).length,
+    theory: s.id === 'gpd' || !!MAGNET[s.id]
+  }));
+  return {
+    app: 'Chronos Terra', version: '0.16.0', exported: new Date().toISOString(),
+    window: {
+      from: new Date(g.t0).toISOString(), to: new Date(g.t1).toISOString(),
+      range: g.sel || ($('gRange') && $('gRange').value) || '',
+      binDays: g.bin ? g.bin / 864e5 : null,
+      minMagnitude: g.mag || graphMagMin(),
+      region: g.region || graphRegion(),
+      regionLabel: (Q_REGIONS[g.region || graphRegion()] || Q_REGIONS.all).label,
+      regionNote: 'Coarse latitude/longitude rectangle, not a tectonic-plate boundary.'
+    },
+    series, lag: lastLagResult ? Object.assign({}, lastLagResult) : { steps: lagScanSteps, none: true },
+    sources: healthSummary(),
+    caveat: 'Exploratory visualisation, not peer-reviewed science or a prediction. Theory-tagged series are proxies, not the named physical quantity.'
+  };
+}
+function findingPngDataUrl() {
+  const src = $('graphCanvas');
+  if (!src || !graphDrawn) return '';
+  const m = findingMeta();
+  const dpr = window.devicePixelRatio || 1;
+  const w = m.window;
+  const lagLine = m.lag.none ? 'Lag scan: no comparable pair'
+    : 'Lag peak ' + m.lag.label + ' · r=' + m.lag.r.toFixed(3) + ' · n=' + m.lag.n +
+      ' · 95% band |r|<' + m.lag.crit95.toFixed(3) + (m.lag.peakSig ? ' (outside)' : ' (within)') +
+      ' · BH q=' + (m.lag.q == null ? '–' : (m.lag.q < 1e-4 ? m.lag.q.toExponential(2) : m.lag.q.toFixed(3))) +
+      (m.lag.bhSig ? ' (passes FDR)' : '') +
+      (m.lag.ab ? ' · A/B prev ' + (m.lag.ab.prevLag == null ? 'n/a' : m.lag.ab.prevLag) + ' (' + m.lag.ab.stable + ')' : '');
+  const lines = [
+    'CHRONOS TERRA · ' + w.from.slice(0, 10) + ' → ' + w.to.slice(0, 10) + ' · ' + w.range + ' · ' + w.regionLabel,
+    'Series: ' + (m.series.map(s => s.label + (s.theory ? ' ·theory' : '')).join(' · ') || 'none'),
+    'M≥' + w.minMagnitude + ' · bin ' + (w.binDays == null ? '—' : w.binDays + ' d') + ' · lag window ±' + m.lag.steps +
+      (w.region === 'all' ? '' : ' · ' + w.regionNote),
+    lagLine,
+    m.caveat
+  ];
+  const out = document.createElement('canvas');
+  out.width = src.width;
+  const capH = Math.round((24 + lines.length * 20 + 14) * dpr);
+  out.height = src.height + capH;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(src, 0, 0);
+  ctx.textBaseline = 'top';
+  ctx.font = Math.round(13 * dpr) + 'px Segoe UI';
+  ctx.fillStyle = '#dbe4ff';
+  let y = src.height + 16 * dpr;
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillStyle = i === lines.length - 1 ? '#8b96bd' : '#dbe4ff';
+    ctx.fillText(lines[i], 16 * dpr, y);
+    y += 20 * dpr;
+  }
+  return out.toDataURL('image/png');
+}
+async function exportFinding() {
+  const png = findingPngDataUrl();
+  if (!png) { log('export: no graph drawn yet'); return; }
+  if (!window.ct || typeof window.ct.saveFile !== 'function') { log('export: save bridge unavailable'); return; }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const base = 'chronos-finding-' + stamp;
+  const img = await window.ct.saveFile(base + '.png', png.split(',')[1], 'base64');
+  if (img.canceled || !img.ok) {
+    if (!img.canceled) log('export png failed: ' + img.error);
+    return;
+  }
+  const js = await window.ct.saveFile(base + '.json', JSON.stringify(findingMeta(), null, 2), 'utf8');
+  if (!js.ok && !js.canceled) log('export json failed: ' + js.error);
+  log('finding exported: ' + img.path);
+}
+
+/* ---------- saved / built-in analysis views ---------- */
+const BUILTIN_VIEWS = {
+  marchitelli: {
+    label: 'Proton density → M6 quakes (~1 d)', range: 'y1', mag: '6', region: 'all',
+    series: ['gq', 'gd2'], lagSteps: 3, lagAB: false,
+    note: 'Daily bin, M≥6 and historical OMNIWeb proton density. Look for a ~1-day peak — exploratory, not a confirmed mechanism.'
+  },
+  sunspot11: {
+    label: 'Sunspot cycle ↔ quakes (monthly)', range: 'y25', mag: '4.5', region: 'all',
+    series: ['gq', 'gsn'], lagSteps: 12, lagAB: false,
+    note: 'Monthly bin across 25 years. Two slow trends can correlate without either causing the other.'
+  },
+  storms: {
+    label: 'Geomagnetic storm stack', range: 'y3', mag: '5', region: 'all',
+    series: ['gkp', 'gdst', 'gbz'], lagSteps: 7, lagAB: false,
+    note: 'Daily indices: storm strength (Dst), coupling (IMF Bz) and field agitation (Kp) on the same clock.'
+  }
+};
+function escapeHtml(v) {
+  return String(v).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]);
+}
+function loadViews() {
+  try { return JSON.parse(localStorage.getItem('ct_views') || '{}') || {}; } catch (e) { return {}; }
+}
+function saveViews(v) { localStorage.setItem('ct_views', JSON.stringify(v)); }
+function captureView() {
+  return {
+    range: $('gRange').value, mag: $('gMag').value, region: $('gRegion').value,
+    series: GRAPH_SERIES.filter(s => $(s.id) && $(s.id).checked).map(s => s.id),
+    lagSteps, lagAB, winEnd: graphWinEnd
+  };
+}
+function applyView(v, note) {
+  if (!v) return;
+  if (v.range && GRAPH_SPAN_DAYS[v.range]) $('gRange').value = v.range;
+  if (v.mag) $('gMag').value = v.mag;
+  if (v.region && Q_REGIONS[v.region] && $('gRegion')) $('gRegion').value = v.region;
+  const wanted = v.series || [];
+  GRAPH_SERIES.forEach(s => { if ($(s.id)) $(s.id).checked = wanted.indexOf(s.id) >= 0; });
+  lagScanSteps = Math.max(1, Math.min(30, +v.lagSteps || 6));
+  lagAB = !!v.lagAB;
+  graphWinEnd = v.winEnd == null ? null : v.winEnd;
+  if ($('viewNote')) $('viewNote').textContent = note || '';
+  updateGraphWinTip();
+  loadGraphSeries();
+}
+function renderViewOptions(selectValue) {
+  const sel = $('viewPreset');
+  if (!sel) return;
+  let html = '<option value="">— view preset —</option>' +
+    Object.keys(BUILTIN_VIEWS).map(k =>
+      '<option value="builtin:' + k + '">' + escapeHtml(BUILTIN_VIEWS[k].label) + '</option>').join('');
+  const names = Object.keys(loadViews());
+  if (names.length) {
+    html += '<optgroup label="Saved in this browser">' + names.map(n =>
+      '<option value="saved:' + encodeURIComponent(n) + '">' + escapeHtml(n) + '</option>').join('') + '</optgroup>';
+  }
+  sel.innerHTML = html;
+  if (selectValue) sel.value = selectValue;
+}
+function wireViews() {
+  const sel = $('viewPreset'), note = $('viewNote');
+  if (!sel) return;
+  renderViewOptions();
+  sel.addEventListener('change', () => {
+    const v = sel.value;
+    if (!v) { if (note) note.textContent = ''; return; }
+    if (v.indexOf('builtin:') === 0) {
+      const def = BUILTIN_VIEWS[v.slice(8)];
+      if (def) applyView(def, def.note);
+    } else if (v.indexOf('saved:') === 0) {
+      const name = decodeURIComponent(v.slice(6));
+      const saved = loadViews();
+      applyView(saved[name], 'Saved view: ' + name);
+    }
+  });
+  $('viewSave').addEventListener('click', () => {
+    const name = prompt('Name this view', 'my view ' + new Date().toLocaleDateString());
+    if (!name) return;
+    const saved = loadViews();
+    saved[name] = captureView();
+    saveViews(saved);
+    renderViewOptions('saved:' + encodeURIComponent(name));
+    if (note) note.textContent = 'Saved “' + name + '” in this browser.';
+    log('saved view: ' + name);
+  });
+  $('viewDelete').addEventListener('click', () => {
+    if (sel.value.indexOf('saved:') !== 0) return;
+    const name = decodeURIComponent(sel.value.slice(6));
+    const saved = loadViews();
+    delete saved[name];
+    saveViews(saved);
+    renderViewOptions();
+    if (note) note.textContent = 'Deleted “' + name + '”.';
+  });
 }
 
 /* ---------- studies / papers ---------- */
@@ -2696,6 +3409,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     bootMsg('decoding earthquake archive…');
     log('requesting archive…');
     S.q = await window.ct.quakeArchive();
+    markFeed('quakes', true, S.q.t.length.toLocaleString() + ' events');
     S.tMin = S.q.t[0]; S.tMax = S.q.t[S.q.t.length - 1];
     buildCounts();
     S.winEnd = S.tMax * 1000;
@@ -2723,6 +3437,14 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
       HZ_ON[cb.dataset.hz] = cb.checked; saveHz(); applyHz();
     }));
     [...document.querySelectorAll('.hz-types input')].forEach(cb => cb.checked = !!HZ_ON[cb.dataset.hz]);
+    const lc = $('lyClimate');
+    if (lc) {
+      lc.checked = localStorage.getItem('ct_climate') !== 'off';
+      lc.addEventListener('change', () => {
+        localStorage.setItem('ct_climate', lc.checked ? 'on' : 'off');
+        drawTimeline();
+      });
+    }
     $('lyFlares').addEventListener('change', applySidebar);
     $('sunStripBtn').addEventListener('click', () => {
       S.sunStrip = !S.sunStrip;
@@ -2741,6 +3463,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
 
     wirePopups();
     wireCapitals();
+    wireHealth();
     loadLive24();
     loadHazards();
     bootMsg('loading CME + flare data…');

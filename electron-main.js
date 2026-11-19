@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
@@ -350,6 +350,28 @@ ipcMain.handle('post-text', async (_e, url, body) => {
     return { ok: true, body: await res.text() };
   } catch (err) {
     return { ok: false, status: 0, error: String(err && err.message || err) };
+  }
+});
+
+/* Export a finding (PNG with baked-in caption, plus JSON metadata) via a native
+   save dialog. The renderer supplies already-encoded bytes; the main process only
+   picks a destination and writes it, so no path logic lives in the web layer. */
+ipcMain.handle('save-file', async (_e, suggestedName, data, encoding) => {
+  const safeName = String(suggestedName || 'chronos-export').replace(/[^\w.\- ]/g, '_').slice(0, 120);
+  const r = await dialog.showSaveDialog({
+    title: 'Export Chronos Terra finding',
+    defaultPath: path.join(app.getPath('documents'), safeName),
+    filters: [
+      { name: safeName.endsWith('.png') ? 'PNG image' : 'JSON data', extensions: [safeName.endsWith('.png') ? 'png' : 'json'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(r.filePath, Buffer.from(data, encoding === 'base64' ? 'base64' : 'utf8'));
+    return { ok: true, path: r.filePath };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err) };
   }
 });
 
