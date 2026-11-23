@@ -386,6 +386,19 @@ async function main() {
         exp.meta.series.length > 0 && exp.png.startsWith('data:image/png'),
         (exp.meta ? exp.meta.series.length + ' series' : 'no meta') + ' · ' + exp.png);
 
+  // CSV export of the visible series (long format, one row per point).
+  const csv = await evaluate(`({
+    button: !!document.getElementById('graphCsv'),
+    bridge: !!(window.ct && typeof window.ct.saveFile === 'function'),
+    data: typeof graphCsvData === 'function' ? (() => {
+      const d = graphCsvData();
+      return { header: d.header, rows: d.rows, series: d.series.length };
+    })() : null
+  })`);
+  check('series CSV export', csv.button && csv.bridge && !!csv.data &&
+        csv.data.header === 'series,time_iso,time_ms,value' && csv.data.rows > 0 && csv.data.series > 0,
+        csv.data ? csv.data.rows + ' rows · ' + csv.data.series + ' series' : 'no data');
+
   // Event markers on the graph.
   const markers = await evaluate(`({
     toggle: !!(document.getElementById('gEvents') && document.getElementById('gEvents').checked),
@@ -420,6 +433,22 @@ async function main() {
   check('saved view presets', presetCount >= 3 && !!preset && preset.range === 'y1' &&
         preset.mag === '6' && preset.region === 'all' && preset.gd2 && !preset.gsn && preset.lag === 3,
         preset ? preset.range + ' M≥' + preset.mag + ' ' + preset.region + ' lag±' + preset.lag : 'no preset');
+
+  // Lunation times are refined from the Meeus elongation, not mean-month arithmetic.
+  const lun = await evaluate(`(() => {
+    if (typeof moonEvents !== 'function') return null;
+    const nm = moonEvents(2024, 2024, false).find(t => t >= Date.UTC(2024, 3, 1) && t < Date.UTC(2024, 4, 1));
+    const fm = moonEvents(2024, 2024, true).find(t => t >= Date.UTC(2024, 3, 1) && t < Date.UTC(2024, 4, 1));
+    return {
+      nm: nm ? new Date(nm).toISOString() : '',
+      fm: fm ? new Date(fm).toISOString() : '',
+      nmErr: nm ? Math.abs(nm - Date.UTC(2024, 3, 8, 18, 21)) / 60000 : 1e9,
+      fmErr: fm ? Math.abs(fm - Date.UTC(2024, 3, 23, 23, 49)) / 60000 : 1e9
+    };
+  })()`);
+  check('precise lunation times', !!lun && lun.nmErr <= 10 && lun.fmErr <= 10,
+        lun ? 'new ' + lun.nm.slice(11, 16) + ' (±' + lun.nmErr.toFixed(1) + ' min) · full ' +
+              lun.fm.slice(11, 16) + ' (±' + lun.fmErr.toFixed(1) + ' min)' : 'not available');
 
   // Trigger windows: superposed-epoch profile tested against a 95% shuffle envelope.
   await evaluate(`(() => {

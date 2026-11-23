@@ -703,7 +703,21 @@ function syzElongDeg(ms) {
     - 0.114336 * Math.sin(2 * F * RD)
     + 0.058793 * Math.sin((2 * D - 2 * Mp) * RD)
     + 0.057212 * Math.sin((2 * D - Ms - Mp) * RD)
-    + 0.05332 * Math.sin((2 * D + Mp) * RD));
+    + 0.053320 * Math.sin((2 * D + Mp) * RD)
+    + 0.045758 * Math.sin((2 * D - Ms) * RD)
+    - 0.040923 * Math.sin((Ms - Mp) * RD)
+    - 0.034720 * Math.sin(D * RD)
+    - 0.030383 * Math.sin((Ms + Mp) * RD)
+    + 0.015327 * Math.sin((2 * D - 2 * F) * RD)
+    - 0.012528 * Math.sin((Mp + 2 * F) * RD)
+    + 0.010980 * Math.sin((Mp - 2 * F) * RD)
+    + 0.010675 * Math.sin((4 * D - Mp) * RD)
+    + 0.010034 * Math.sin(3 * Mp * RD)
+    + 0.008548 * Math.sin((4 * D - 2 * Mp) * RD)
+    - 0.007888 * Math.sin((2 * D + Ms - Mp) * RD)
+    - 0.006766 * Math.sin((2 * D + Ms) * RD)
+    - 0.005163 * Math.sin((D - Mp) * RD)
+    + 0.004987 * Math.sin((D + Ms) * RD));
   let el = Math.abs(_norm360(ml - sl));
   if (el > 180) el = 360 - el;
   return el;
@@ -1418,19 +1432,39 @@ function computeCycles() {
 }
 
 /* ---------- trigger-window (superposed epoch around event days) ---------- */
-function moonEvents(y0, y1) {
+// Golden-section refinement of a mean-lunation seed against the Meeus elongation.
+// New moon = elongation minimum (0°), full moon = maximum (180°). ±2 d around the
+// seed is safely inside one lunation, so the local extremum is the right one.
+function refineMoonPhase(seedMs, full) {
+  const f = full ? ms => -syzElongDeg(ms) : ms => syzElongDeg(ms);
+  let a = seedMs - 2 * 864e5, b = seedMs + 2 * 864e5;
+  const gr = (Math.sqrt(5) - 1) / 2;
+  let c = b - gr * (b - a), d = a + gr * (b - a);
+  let fc = f(c), fd = f(d);
+  for (let i = 0; i < 60 && b - a > 1000; i++) {
+    if (fc < fd) { b = d; d = c; fd = fc; c = b - gr * (b - a); fc = f(c); }
+    else { a = c; c = d; fc = fd; d = a + gr * (b - a); fd = f(d); }
+  }
+  return Math.round((a + b) / 2);
+}
+function moonEvents(y0, y1, full) {
   const ev = [];
   const start = Date.UTC(y0, 0, 1), end = Date.UTC(y1 + 1, 0, 1);
   // Rewind the mean-lunation clock to the first new moon at/after the start year.
   let t = NEWMOON_REF - Math.floor((NEWMOON_REF - start) / SYNODIC_MS) * SYNODIC_MS;
-  for (; t < end; t += SYNODIC_MS) if (t >= start) ev.push(t);
+  for (; t < end; t += SYNODIC_MS) {
+    if (t < start) continue;
+    const seed = full ? t + SYNODIC_MS / 2 : t;
+    const p = refineMoonPhase(seed, !!full);
+    if (p >= start && p < end) ev.push(p);
+  }
   return ev;
 }
 
 function triggerDays(type) {
   const y0 = 1970, y1 = new Date(S.tMax * 1000).getUTCFullYear();
-  if (type === 'newmoon') return moonEvents(y0, y1);
-  if (type === 'fullmoon') return moonEvents(y0, y1).map(t => t + SYNODIC_MS / 2);
+  if (type === 'newmoon') return moonEvents(y0, y1, false);
+  if (type === 'fullmoon') return moonEvents(y0, y1, true);
   if (type === 'kpstorm' && S.kpIdx) {
     return S.kpIdx.dKp.filter(d => d.v >= 5).map(d => d.t);
   }
@@ -1536,7 +1570,7 @@ function computeTW() {
   const peak = Math.max(...pctDeviation), trough = Math.min(...pctDeviation);
   const expected = Math.round(0.05 * (2 * W + 1) * 10) / 10;
   const moonNote = (type === 'newmoon' || type === 'fullmoon')
-    ? '<br>Moon phase uses a mean 29.53-day lunation (accurate to roughly ±0.5 day).' : '';
+    ? '<br>Moon phase times from Meeus solar/lunar longitudes (conjunction/opposition), typically within a few minutes.' : '';
   $('twOut').innerHTML =
     '<b>' + n.toLocaleString() + ' triggers</b> · ' + type + ' · ±' + W + ' d · M≥' + magMin +
     '<br>mean rate ' + avg.toFixed(2) + ' quakes/bin/trigger · peak ' + peak.toFixed(1) +
@@ -2563,6 +2597,7 @@ function wireRSS() {
 function wireGraphs() {
   wireViews();
   $('graphExport').addEventListener('click', exportFinding);
+  $('graphCsv').addEventListener('click', exportCsv);
   $('graphsClose').addEventListener('click', () => setView('globe'));
   $('papersClose').addEventListener('click', () => setView('globe'));
   $('moonClose').addEventListener('click', () => setView('globe'));
@@ -3154,6 +3189,39 @@ async function exportFinding() {
   const js = await window.ct.saveFile(base + '.json', JSON.stringify(findingMeta(), null, 2), 'utf8');
   if (!js.ok && !js.canceled) log('export json failed: ' + js.error);
   log('finding exported: ' + img.path);
+}
+
+/* ---------- export the visible graph series as long-format CSV ---------- */
+// One row per point, so the file can be pivoted or joined in any spreadsheet:
+//   series,time_iso,time_ms,value
+function csvCell(v) {
+  const s = String(v == null ? '' : v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function graphCsvData() {
+  const active = GRAPH_SERIES.filter(s => $(s.id) && $(s.id).checked);
+  const header = 'series,time_iso,time_ms,value';
+  const lines = [header];
+  let rows = 0;
+  for (const s of active) {
+    for (const p of (graphSeriesCache[s.id] || [])) {
+      if (p.v == null || !isFinite(p.v)) continue;
+      lines.push(csvCell(s.label) + ',' + new Date(p.t).toISOString() + ',' + Math.round(p.t) + ',' + p.v);
+      rows++;
+    }
+  }
+  return { header, text: lines.join('\r\n') + '\r\n', rows, series: active.map(s => s.label) };
+}
+async function exportCsv() {
+  if (!graphDrawn || !graphCur) { log('csv export: no graph drawn yet'); return; }
+  if (!window.ct || typeof window.ct.saveFile !== 'function') { log('csv export: save bridge unavailable'); return; }
+  const csv = graphCsvData();
+  if (!csv.rows) { log('csv export: no numeric points in the selected series'); return; }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const r = await window.ct.saveFile('chronos-series-' + stamp + '.csv', csv.text, 'utf8');
+  if (!r || r.canceled) return;
+  if (!r.ok) { log('csv export failed: ' + r.error); return; }
+  log('series csv exported: ' + csv.rows + ' rows → ' + r.path);
 }
 
 /* ---------- saved / built-in analysis views ---------- */

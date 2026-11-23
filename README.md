@@ -115,6 +115,10 @@ tests/            PowerShell live‑endpoint smoke tests
 - [x] Region‑filtered quake series (coarse latitude/longitude boxes)
 - [x] Benjamini–Hochberg FDR across the scanned lags
 - [x] A/B earlier‑window lag comparison overlay
+- [ ] Quake‑density heatmap toggle
+- [ ] Full‑archive and lab‑results CSV export
+- [ ] About‑tab FAQ
+- [ ] Per‑panel loading animations
 
 ## 📄 License
 
