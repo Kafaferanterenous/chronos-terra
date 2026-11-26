@@ -7,7 +7,7 @@
 `1970 → present` &nbsp;·&nbsp; Windows portable desktop app &nbsp;·&nbsp; Electron + MapLibre + Canvas + Three.js
 
 ![data](https://img.shields.io/badge/data-1970%E2%80%93present-blue)
-![version](https://img.shields.io/badge/version-0.18.0-brightgreen)
+![version](https://img.shields.io/badge/version-0.19.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-9b6bff)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20(x64%2FARM)-5ea8ff)
 ![stack](https://img.shields.io/badge/stack-Electron%20%C2%B7%20MapLibre%20%C2%B7%20THREE-e6a23c)
@@ -38,10 +38,14 @@ into one offline‑capable desktop app, then lets *you* test the relationship gr
 | 🌙 | **Earth–Moon tides view** — a 3‑D scene of the gravitational tide: sub‑lunar & sub‑solar points, equilibrium bulge + force arrows, honest real‑size readouts (≈53 cm lunar + ≈25 cm solar). 🔆 **Quakes & eruptions that happened within ±3 days of a new moon** (Sun & Moon on the same side — strongest combined pull) glow **bright gold**; toggle off in Settings |
 | ⏯️ | **Watchable timeline** — press ▶ and pick a speed from **30 m/s** (glacial) up to 1 day/s; playing now *wraps* at the archive end instead of stopping |
 | ☀️ | **Solar activity** — sunspot number, F10.7 flux, Ap/Kp geomagnetic indices (NOAA/GFZ bundled series) |
-| 🧲 | **Magnetosphere wires** — bundled NASA OMNIWeb history (1970→2025‑12‑31) *·theory*: proton density, IMF \|B\| & Bz, dynamic pressure, Dst, E‑field |
+| 🧲 | **Magnetosphere wires** — bundled NASA OMNIWeb history (1970→2025‑12‑31; refresh extends to NASA's latest published day) *·theory*: proton density, IMF \|B\| & Bz, dynamic pressure, Dst, E‑field |
 | 📍 | **Quake field context** — click any archive or live quake to sample Bz, E‑field, Dst, pressure and density at that UTC time; explicitly global L1 / planetary proxies, not fields above the epicentre |
 | 🧭 | **Windows-friendly cache** — keeps the USB-portable folder layout when writable, falls back to per-user app data when it is not; paths are shown in Settings/About, and window size/zoom are remembered |
-| 🩺 | **Data-health refresh** — top-bar badge shows stale bundled OMNI series, exact cache paths, and a one-click refresh for the archive and live feeds; slow OMNI series have a bulk refresh in Graphs → data |
+| 🩺 | **Data-health refresh** — top-bar badge shows stale bundled OMNI series, exact cache paths, and a one-click refresh for the archive and live feeds; slow OMNI series have a bulk refresh in Graphs → data. OMNIWeb trails real time by ~1–2 weeks, so refresh follows NASA's published cap rather than today's date |
+| 🔥 | **Density heatmap** — optional kernel-density glow under the visible quake dots, magnitude-weighted and window-aware |
+| ⤓️ | **Full exports** — complete archive CSV, visible-series CSV, and lab CSV containing the lag scan plus trigger-window profile with its 95% envelope |
+| 💠 | **Panel loading states** — small spinners on the layers, graphs and lab panels while feeds, series or null shuffles are still running |
+| ❓ | **About FAQ** — short answers on causality, stale OMNI data, epicentre vs L1 fields, cache paths, heatmap meaning and exports |
 | 📈 | **Graphs view** — multi‑series overlays, independent y‑scaling, daily/monthly binning, hover inspection, range windowing |
 | ⏳ | **Lag‑scan engine** — shifts each series pair across days *or* months to surface lead/lag structure (≈1‑day proton scale follows Marchitelli et al. 2020) |
 | 🔄 | **Per‑type reload** — refresh any bundled magnetosphere series live from NASA OMNIWeb with local caching |
@@ -107,6 +111,7 @@ tests/            PowerShell live‑endpoint smoke tests
 - [x] v0.15.x — focus views, denser rulers, cursor readout, Studies + live news, help system
 - [x] v0.16.0 — Earth–Moon tides view, syzygy (new‑moon) event highlight, play‑wrap, speed presets down to 30 m/s
 - [x] v0.18.0 — writable-cache fallback, remembered window/zoom, stale-data indicators and refresh controls
+- [x] v0.19.0 — density heatmap, full-archive/lab CSV exports, About FAQ, per-panel loading states
 - [ ] macOS / ARM portable builds (CI workflow ready — see `.github/workflows/macos.yml`)
 - [x] Correlation lab round 2 — day‑scale lag slider + significance band
 - [x] Climate & extreme‑weather event layer on the timeline
@@ -120,10 +125,10 @@ tests/            PowerShell live‑endpoint smoke tests
 - [x] Benjamini–Hochberg FDR across the scanned lags
 - [x] A/B earlier‑window lag comparison overlay
 - [x] Event-time magnetic / electric field context on quake popups, graph markers and notable-event cards
-- [ ] Quake-density heatmap toggle
-- [ ] Full‑archive and lab‑results CSV export
-- [ ] About‑tab FAQ
-- [ ] Per‑panel loading animations
+- [x] Quake-density heatmap toggle
+- [x] Full‑archive and lab‑results CSV export
+- [x] About‑tab FAQ
+- [x] Per‑panel loading animations
 
 ## 📄 License
 

@@ -4,8 +4,10 @@
    Endpoint: https://omniweb.gsfc.nasa.gov/cgi/nx1.cgi  (needs HTTP POST, form-encoded)
    Run: node tools/fetch_magnet.mjs [startYear] [endYear]
    Defaults: startYear=1970, endYear=<current year>.
-   One HTTP request per year per single var (kept small + polite). Reuses disk cache
-   in data_archive\magnet_raw\ so re-runs are cheap. */
+   One HTTP request per year per single var (kept small + polite). Historic years
+   reuse the disk cache in data_archive\magnet_raw\; the current year is always
+   fetched fresh because OMNIWeb publishes 1–2 weeks behind real time. A current-year
+   request past NASA's published cap is retried using the cap in the error page. */
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -79,22 +81,54 @@ function parsePre(html) {
 function doyToUtcMs(y, doy) {
   return Date.UTC(y, 0, doy);
 }
+function todayStamp() {
+  return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+}
+function omniYearEnd(year) {
+  const curYear = new Date().getUTCFullYear();
+  return year < curYear ? `${year}1231` : todayStamp();
+}
+function reportedOmniCap(html) {
+  const m = /correct range:\s*\d{8}\s*-\s*(\d{8})/i.exec(html || '');
+  return m ? m[1] : null;
+}
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
 
 async function fetchYear(year, varId, varNum) {
   if (year < 1970) return null;
   const rawFile = path.join(RAWCACHE, `${varId}_${year}.txt`);
-  let html;
-  if (fs.existsSync(rawFile)) {
-    html = fs.readFileSync(rawFile, 'utf8');
-  } else {
-    const sd = `${year}0101`, ed = `${year}1231`;
-    const body = `activity=retrieve&res=daily&spacecraft=omni2` +
-      `&start_date=${sd}&end_date=${ed}` +
-      `&scale=linear&imagex=960&imagey=720&charsize=1.5&symsize=0.5&vars=${varNum}`;
-    html = await postText('https://omniweb.gsfc.nasa.gov/cgi/nx1.cgi', body);
+  const curYear = new Date().getUTCFullYear();
+  let html = null;
+  // Historic years are immutable, so the cache is safe. The current year grows
+  // regularly and must be fetched again on every builder run.
+  if (year < curYear && fs.existsSync(rawFile)) {
+    const cached = fs.readFileSync(rawFile, 'utf8');
+    if (/<pre>/.test(cached)) html = cached;
+  }
+  if (html === null) {
+    let end = omniYearEnd(year);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const body = `activity=retrieve&res=daily&spacecraft=omni2` +
+        `&start_date=${year}0101&end_date=${end}` +
+        `&scale=linear&imagex=960&imagey=720&charsize=1.5&symsize=0.5&vars=${varNum}`;
+      html = await postText('https://omniweb.gsfc.nasa.gov/cgi/nx1.cgi', body);
+      if (/<pre>/.test(html)) break;
+      const cap = reportedOmniCap(html);
+      if (year >= curYear && cap && cap !== end) {
+        console.log(`[${varId}] ${year}: OMNIWeb cap ${end} -> ${cap}`);
+        end = cap;
+        await sleep(300);
+        continue;
+      }
+      const msg = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(`OMNIWeb returned no data for ${year}: ${msg}`);
+    }
+    if (!/<pre>/.test(html)) throw new Error(`OMNIWeb returned no data for ${year}`);
     fs.mkdirSync(RAWCACHE, { recursive: true });
     fs.writeFileSync(rawFile, html);
-    await new Promise(r => setTimeout(r, 1200)); // polite
+    await sleep(1200); // polite
   }
   const rows = parsePre(html);
   // OMNIWeb returns hourly rows even for res=daily; average an entire day into
@@ -121,7 +155,9 @@ async function fetchYear(year, varId, varNum) {
 async function main() {
   const curYear = new Date().getUTCFullYear();
   const start = process.argv[2] ? parseInt(process.argv[2], 10) : 1970;
-  const end = process.argv[3] ? parseInt(process.argv[3], 10) : curYear;
+  const requestedEnd = process.argv[3] ? parseInt(process.argv[3], 10) : curYear;
+  const end = Math.min(requestedEnd, curYear);
+  if (requestedEnd > curYear) console.log(`clamping end year ${requestedEnd} -> ${curYear} (OMNIWeb has no future data)`);
   fs.mkdirSync(OUT, { recursive: true });
 
   const summary = {};

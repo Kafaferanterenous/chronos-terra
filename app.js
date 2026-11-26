@@ -24,6 +24,18 @@ const MONTH = 2629800000;
 
 function log(m) { console.log('[renderer] ' + m); }
 
+/* Small per-panel busy indicator. Panels keep showing their old content while
+   fetching; the spinner only says which panel is still working. */
+function panelBusy(panel, on, label) {
+  const el = $(panel + 'Busy');
+  if (!el) return;
+  el.textContent = on ? (label || 'loading…') : '';
+  el.classList.toggle('hidden', !on);
+  el.setAttribute('aria-busy', on ? 'true' : 'false');
+  const host = $(panel) || $(panel + 'Panel');
+  if (host) host.classList.toggle('is-loading', !!on);
+}
+
 /* ---------- data source health ----------
    Every feed records its last fetch outcome. Cached data is never hidden: a
    failed refresh with usable cache is reported as unavailable (cached), not OK. */
@@ -39,7 +51,10 @@ const FEED_LABELS = {
   omni: 'OMNIWeb solar wind',
   news: 'Live news feeds'
 };
-const OMNI_STALE_DAYS = 7;
+// OMNI2 is a curated hourly archive that usually trails real time by 1–2 weeks,
+// so 7 d flagged a healthy freshly refreshed series as stale. 21 d flags bundles
+// that are genuinely behind NASA's published coverage.
+const OMNI_STALE_DAYS = 21;
 function magnetStaleDays(m) {
   const d = MAGNETDATA && MAGNETDATA[m.key];
   if (!d || !d.pts || !d.pts.length) return null;
@@ -209,6 +224,21 @@ function buildMap(land, plates) {
       },
       filter: ['>=', ['get', 'm'], 4.5]
     });
+    // Density sits beneath the dots and uses the same window-filtered source,
+    // so the glow always matches the visible quakes.
+    map.addLayer({
+      id: 'quakes-heat', source: 'quakes', type: 'heatmap',
+      layout: { visibility: 'none' },
+      paint: {
+        'heatmap-weight': ['interpolate', ['linear'], ['get', 'm'], 4.5, 0.2, 6, 0.6, 8, 1],
+        'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 1, 0.55, 4, 1.5],
+        'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 1, 18, 4, 38],
+        'heatmap-opacity': 0.62,
+        'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+          0, 'rgba(30,20,60,0)', 0.2, 'rgba(75,50,160,.45)', 0.5, 'rgba(255,140,60,.65)',
+          0.8, 'rgba(255,70,90,.82)', 1, 'rgba(255,240,180,.95)']
+      }
+    }, 'quakes-circle');
     map.addSource('live24', { type: 'geojson', data: emptyFC() });
     map.addLayer({
       id: 'live24-circle', source: 'live24', type: 'circle',
@@ -1485,6 +1515,7 @@ function wireAna() {
     if (!$('anaPanel').classList.contains('hidden')) computeLab();
   });
   $('anaClose').addEventListener('click', () => $('anaPanel').classList.add('hidden'));
+  if ($('labCsv')) $('labCsv').addEventListener('click', exportLabCsv);
   $('lagR').addEventListener('input', () => { $('lagVal').textContent = $('lagR').value; });
   $('computeBtn').addEventListener('click', computeLab);
 }
@@ -1745,10 +1776,57 @@ function drawTW() {
   ctx.fillText('M≥' + TW_RESULT.magMin, W - 46, 10);
 }
 
+/* Lab results in one long-format CSV: the scanned monthly-lag curve plus the
+   current superposed-epoch profile and its 95% shuffle envelope. */
+function labCsvData() {
+  const header = 'result,key_a,key_b,lag_months,day_offset,mag_min,triggers,permutations,n,r,p,value,pct_deviation,lo95,hi95,outside_band';
+  const lines = [header];
+  const num = v => (v == null || !isFinite(v)) ? '' : v;
+  let rows = 0;
+  if (LAG_CURVE && LAG_META) {
+    for (const c of LAG_CURVE) {
+      lines.push(['lag', LAG_META.keyA, LAG_META.keyB, c.lag, '', '', '', '',
+        num(c.n), num(c.r), c.lag === LAG_META.lag ? num(LAG_META.p) : '',
+        '', '', '', '', ''].map(csvCell).join(','));
+      rows++;
+    }
+  }
+  if (TW_RESULT) {
+    const avg = TW_RESULT.avg || 1;
+    for (let i = 0; i < TW_RESULT.bins.length; i++) {
+      const loP = ((TW_RESULT.loEnv[i] - TW_RESULT.avg) / avg) * 100;
+      const hiP = ((TW_RESULT.hiEnv[i] - TW_RESULT.avg) / avg) * 100;
+      const dev = TW_RESULT.pctDeviation[i];
+      lines.push(['trigger', TW_RESULT.type, 'quake_rate', '', i - TW_RESULT.W,
+        TW_RESULT.magMin, TW_RESULT.evDays, TW_RESULT.perm, '', '', '',
+        num(TW_RESULT.bins[i]), num(dev), num(loP), num(hiP),
+        (dev < loP || dev > hiP) ? 1 : 0].map(csvCell).join(','));
+      rows++;
+    }
+  }
+  return { header, text: lines.join('\r\n') + '\r\n', rows };
+}
+async function exportLabCsv() {
+  if (!window.ct || typeof window.ct.saveFile !== 'function') { log('lab csv export: save bridge unavailable'); return; }
+  const csv = labCsvData();
+  if (!csv.rows) { log('lab csv export: run the lab or a trigger window first'); return; }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const r = await window.ct.saveFile('chronos-lab-' + stamp + '.csv', csv.text, 'utf8');
+  if (!r || r.canceled) return;
+  if (!r.ok) { log('lab csv export failed: ' + r.error); return; }
+  log('lab csv exported: ' + csv.rows + ' rows → ' + r.path);
+}
+
+function runTW() {
+  panelBusy('lab', true, 'shuffling 200 nulls…');
+  setTimeout(() => {
+    try { computeTW(); } finally { panelBusy('lab', false); }
+  }, 30);
+}
 function wireTW() {
   $('twW').addEventListener('input', () => { $('twWv').textContent = $('twW').value; });
-  if ($('twMag')) $('twMag').addEventListener('change', () => { if (TW_RESULT) computeTW(); });
-  $('twBtn').addEventListener('click', computeTW);
+  if ($('twMag')) $('twMag').addEventListener('change', () => { if (TW_RESULT) runTW(); });
+  $('twBtn').addEventListener('click', runTW);
 }
 
 /* ---------- stress gauge (experimental composite) ---------- */
@@ -1977,6 +2055,7 @@ function applySidebar() {
   if (!S.map) return;
   const vis = (id, on) => { if (S.map.getLayer(id)) S.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); };
   vis('quakes-circle', $('lyQuakes').checked);
+  vis('quakes-heat', !!($('lyHeat') && $('lyHeat').checked));
   vis('plates-line', $('lyPlates').checked);
   vis('grid-line', $('lyGrid').checked);
   vis('volcs-circle', $('lyVolcs').checked);
@@ -2004,6 +2083,7 @@ function applySidebar() {
   if (S.map.getLayer('quakes-circle')) {
     S.map.setPaintProperty('quakes-circle', 'circle-opacity', $('opQuakes').value / 100);
     S.map.setPaintProperty('quakes-circle', 'circle-color', syzColorExpr());
+    if (S.map.getLayer('quakes-heat')) S.map.setPaintProperty('quakes-heat', 'heatmap-opacity', ($('opQuakes').value / 100) * 0.75);
     const mm = $('magMin').value / 10;
     $('magVal').textContent = mm.toFixed(1);
     S.map.setFilter('quakes-circle', ['>=', ['get', 'm'], mm]);
@@ -2593,6 +2673,7 @@ async function loadGraphSeries() {
   // skip silently if the graphs panel is hidden (switched away) or archive not ready
   if (!S.q) { if (!$('graphsPanel').classList.contains('hidden')) setTimeout(loadGraphSeries, 800); return; }
   if ($('graphsPanel').classList.contains('hidden')) return;
+  panelBusy('graphs', true, 'series…');
   try {
     const { W, H } = graphSizeGuess();
     if (seq !== graphLoadSeq) return;
@@ -2644,6 +2725,8 @@ async function loadGraphSeries() {
     tip.classList.remove('loading');
     tip.textContent = 'graph error: ' + (e.message || e);
     log('graph error: ' + (e.message || e));
+  } finally {
+    panelBusy('graphs', false);
   }
 }
 let graphCur = null;
@@ -2844,37 +2927,63 @@ function setMagnetStatus(key, txt) {
   const el = $('mst-' + key);
   if (el) el.textContent = txt;
 }
+/* OMNIWeb rejects a request past its own last published day (e.g. "correct
+   range: 19631128 - 20261115"). Ask for today, then honour the reported cap. */
+function omniYearEnd(y) {
+  const cur = new Date().getUTCFullYear();
+  return y < cur ? String(y) + '1231' : new Date().toISOString().slice(0, 10).replace(/-/g, '');
+}
+async function fetchOmniYear(varNum, y) {
+  let end = omniYearEnd(y);
+  const current = y >= new Date().getUTCFullYear();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = 'activity=retrieve&res=daily&spacecraft=omni2' +
+      '&start_date=' + y + '0101&end_date=' + end +
+      '&scale=linear&imagex=960&imagey=720&charsize=1.5&symsize=0.5&vars=' + varNum;
+    const r = await window.ct.postText('https://omniweb.gsfc.nasa.gov/cgi/nx1.cgi', body);
+    if (!r || !r.ok) throw new Error('OMNIWeb failed (status ' + (r && r.status) + ')');
+    const pts = parseOmniDaily(r.body);
+    if (pts.length) return pts;
+    if (!current) return [];
+    const reported = /correct range:\s*\d{8}\s*-\s*(\d{8})/i.exec(r.body || '');
+    if (!reported || reported[1] === end) return [];
+    end = reported[1];
+    await new Promise(res => setTimeout(res, 250));
+  }
+  return [];
+}
 async function refreshMagnet(btn, key, sid) {
   const m = MAGNET[sid];
   if (!m || btn.disabled) return;
   btn.disabled = true;
-  setMagnetStatus(key, 'fetching…');
+  setMagnetStatus(key, 'checking coverage…');
   try {
+    // Extend from the last day we already hold instead of re-downloading 56 years
+    // every time. Re-request the last whole year so a partial year can be repaired.
+    const existing = MAGNETDATA[key];
+    const lastT = existing && existing.pts && existing.pts.length ? existing.pts[existing.pts.length - 1].t : 0;
+    const startYear = lastT ? new Date(lastT).getUTCFullYear() : 1970;
     const cur = new Date().getUTCFullYear();
-    // fetch 1970→now in year chunks, daily res (politely, ~10 requests for long spans)
     const all = [];
-    for (let y = 1970; y <= cur; y++) {
-      const body = 'activity=retrieve&res=daily&spacecraft=omni2' +
-        '&start_date=' + y + '0101&end_date=' + y + '1231' +
-        '&scale=linear&imagex=960&imagey=720&charsize=1.5&symsize=0.5&vars=' + m.varNum;
-      const r = await window.ct.postText('https://omniweb.gsfc.nasa.gov/cgi/nx1.cgi', body);
-      if (!r || !r.ok) throw new Error('OMNIWeb failed (status ' + (r && r.status) + ')');
-      const pts = parseOmniDaily(r.body);
-      for (const p of pts) all.push(p);
-      await new Promise(res => setTimeout(res, 700));   // polite
+    if (lastT && existing.pts) for (const p of existing.pts) all.push(p);
+    for (let y = startYear; y <= cur; y++) {
+      setMagnetStatus(key, 'fetching ' + y + '…');
+      for (const p of await fetchOmniYear(m.varNum, y)) all.push(p);
+      await new Promise(res => setTimeout(res, 350));   // polite to OMNIWeb
     }
-    all.sort((a, b) => a.t - b.t);
-    // de-dup by day (OMNIWeb can return overlapping covering full year chunks)
-    const seen = new Set();
-    const dedup = [];
-    for (const p of all) { const k = Math.floor(p.t / 864e5); if (!seen.has(k)) { seen.add(k); dedup.push(p); } }
+    // Later values win on the same UTC day, so fresh rows repair old partial days.
+    const best = new Map();
+    for (const p of all) best.set(Math.floor(p.t / 864e5), p);
+    const dedup = Array.from(best.values()).sort((a, b) => a.t - b.t);
+    const latest = dedup.length ? new Date(dedup[dedup.length - 1].t).toISOString().slice(0, 10) : '—';
     const rec = { id: key, source: 'OMNIWeb OMNI2 daily (refreshed ' + new Date().toISOString().slice(0, 10) + ')', varNum: m.varNum,
       startT: dedup.length ? dedup[0].t : 0, endT: dedup.length ? dedup[dedup.length - 1].t : 0,
       count: dedup.length, pts: dedup.map(p => [p.t, p.v]), cache: true };
     const sv = await window.ct.magnetSave(key, rec);
     if (!sv.ok) throw new Error('could not save cache: ' + sv.error);
     MAGNETDATA[key] = { pts: dedup, count: dedup.length, cache: true, source: rec.source };
-    setMagnetStatus(key, '✓ refreshed ' + dedup.length.toLocaleString() + ' pts');
+    setMagnetStatus(key, '✓ ' + dedup.length.toLocaleString() + ' pts · ' + latest);
+    renderHealth();
     renderMagnetRows();
     if (!$('graphsPanel').classList.contains('hidden')) loadGraphSeries();
   } catch (e) {
@@ -3339,7 +3448,7 @@ function findingMeta() {
     theory: s.id === 'gpd' || !!MAGNET[s.id]
   }));
   return {
-    app: 'Chronos Terra', version: '0.18.0', exported: new Date().toISOString(),
+    app: 'Chronos Terra', version: '0.19.0', exported: new Date().toISOString(),
     window: {
       from: new Date(g.t0).toISOString(), to: new Date(g.t1).toISOString(),
       range: g.sel || ($('gRange') && $('gRange').value) || '',
@@ -3440,6 +3549,30 @@ async function exportCsv() {
   if (!r || r.canceled) return;
   if (!r.ok) { log('csv export failed: ' + r.error); return; }
   log('series csv exported: ' + csv.rows + ' rows → ' + r.path);
+}
+
+/* Full-catalogue export: every archive row, independent of the visible window,
+   magnitude filter, region filter or graph series selection. */
+function archiveCsvData() {
+  const q = S.q;
+  const header = 'time_iso,time_ms,magnitude,latitude,longitude,syzygy';
+  if (!q || !q.t) return { header, text: header + '\r\n', rows: 0 };
+  const lines = [header];
+  for (let i = 0; i < q.t.length; i++) {
+    lines.push(new Date(q.t[i] * 1000).toISOString() + ',' + Math.round(q.t[i] * 1000) +
+      ',' + q.m[i] + ',' + q.la[i] + ',' + q.lo[i] + ',' + (q.syz ? q.syz[i] : 0));
+  }
+  return { header, text: lines.join('\r\n') + '\r\n', rows: q.t.length };
+}
+async function exportArchiveCsv() {
+  if (!S.q) { log('archive csv export: archive not loaded'); return; }
+  if (!window.ct || typeof window.ct.saveFile !== 'function') { log('archive csv export: save bridge unavailable'); return; }
+  const csv = archiveCsvData();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const r = await window.ct.saveFile('chronos-archive-' + stamp + '.csv', csv.text, 'utf8');
+  if (!r || r.canceled) return;
+  if (!r.ok) { log('archive csv export failed: ' + r.error); return; }
+  log('archive csv exported: ' + csv.rows + ' rows → ' + r.path);
 }
 
 /* ---------- saved / built-in analysis views ---------- */
@@ -3712,6 +3845,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     applySidebar();
 
     $('lyQuakes').addEventListener('change', applySidebar);
+    if ($('lyHeat')) $('lyHeat').addEventListener('change', applySidebar);
     $('lyPlates').addEventListener('change', applySidebar);
     $('lyGrid').addEventListener('change', applySidebar);
     $('opQuakes').addEventListener('input', applySidebar);
@@ -3750,6 +3884,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     wirePopups();
     wireCapitals();
     wireHealth();
+    panelBusy('sidebar', true, 'live feeds…');
     loadLive24();
     loadHazards();
     bootMsg('loading CME + flare data…');
@@ -3762,6 +3897,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
     computeSyzygy();
     await loadKp();
     await loadSilso();
+    panelBusy('sidebar', false);
     bootMsg('rendering quakes…');
     refreshQuakes();
     wireAna();
@@ -3794,6 +3930,7 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
         if (r && r.ok === false) notify('Cache folder', String(r.error || r));
       } catch (e) { notify('Cache folder', String(e && e.message || e)); }
     });
+    if ($('archiveCsvBtn')) $('archiveCsvBtn').addEventListener('click', exportArchiveCsv);
     $('helpBtn').addEventListener('click', () => {
       $('helpPanel').classList.toggle('hidden');
       $('aboutPanel').classList.add('hidden');
@@ -3890,6 +4027,7 @@ $('tabMoon').addEventListener('click', () => setView('moon'));
     setTimeout(hideBoot, delay);
     setTimeout(() => { if (!SET.tutorialDone) startTutorial(); }, delay + 700);
   } catch (err) {
+    panelBusy('sidebar', false);
     console.error('init failed:', err.message || err);
     $('bootSub').textContent = 'failed to load archive: ' + (err.message || err);
   }

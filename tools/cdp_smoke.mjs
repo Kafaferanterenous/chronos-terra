@@ -210,6 +210,19 @@ async function main() {
   check('graphs view', graphs === true);
   check('graph canvas fills stage', canvasFit !== null && canvasFit < 2, 'delta=' + canvasFit + ' px');
 
+  // v0.19: the heatmap toggle must actually change the MapLibre layer visibility.
+  const heat = await evaluate(`(() => {
+    const cb = document.getElementById('lyHeat');
+    if (!cb || !S.map || !S.map.getLayer('quakes-heat')) return { ok: false };
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+    const on = S.map.getLayoutProperty('quakes-heat', 'visibility');
+    cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
+    const off = S.map.getLayoutProperty('quakes-heat', 'visibility');
+    return { ok: true, on, off };
+  })()`);
+  check('density heatmap toggle', !!heat && heat.ok === true && heat.on === 'visible' && heat.off === 'none',
+        heat && heat.ok ? heat.on + ' → ' + heat.off : 'layer or checkbox missing');
+
   // Enable a second series (historical proton density) so the lag scan has a pair.
   await evaluate(`(() => {
     const cb = document.getElementById('gd2');
@@ -435,6 +448,47 @@ async function main() {
         reliability.healthButton && reliability.magnetButton),
         reliability ? reliability.staleCount + ' stale OMNI series · refresh controls present' : 'no indicators');
 
+  // The current year must never be requested as YYYY1231: OMNIWeb rejects it.
+  const omniWindow = await evaluate(`(() => {
+    const cur = new Date().getUTCFullYear();
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    return {
+      cur, today,
+      staleDays: typeof OMNI_STALE_DAYS === 'number' ? OMNI_STALE_DAYS : -1,
+      prior: typeof omniYearEnd === 'function' ? omniYearEnd(cur - 1) : '',
+      current: typeof omniYearEnd === 'function' ? omniYearEnd(cur) : '',
+      hasFetch: typeof fetchOmniYear === 'function',
+      capRetry: typeof fetchOmniYear === 'function' && /correct range/.test(fetchOmniYear.toString())
+    };
+  })()`).catch(() => null);
+  check('OMNI coverage window', !!omniWindow && omniWindow.staleDays === 21 &&
+        omniWindow.prior === String(omniWindow.cur - 1) + '1231' &&
+        omniWindow.current === omniWindow.today && omniWindow.hasFetch && omniWindow.capRetry,
+        omniWindow ? 'stale>=' + omniWindow.staleDays + 'd · ' + omniWindow.prior + ' / ' +
+             omniWindow.current + ' · cap retry ' + omniWindow.capRetry : 'no coverage helpers');
+
+  // v0.19: three panel spinners plus a short FAQ in the About panel.
+  const polish = await evaluate(`(() => {
+    const spans = ['sidebarBusy', 'graphsBusy', 'labBusy'].map(id => !!document.getElementById(id));
+    const fn = typeof panelBusy === 'function';
+    if (fn) panelBusy('graphs', true, 'probe');
+    const el = document.getElementById('graphsBusy');
+    const on = !!el && !el.classList.contains('hidden') && /probe/.test(el.textContent);
+    if (fn) panelBusy('graphs', false);
+    const off = !!el && el.classList.contains('hidden');
+    const items = document.querySelectorAll('#aboutPanel .faq details');
+    return {
+      spans, fn, on, off,
+      faqCount: items.length,
+      faqText: Array.from(items).map(d => d.textContent).join(' ')
+    };
+  })()`).catch(() => null);
+  check('panel loading indicators', !!polish && polish.fn && polish.spans.every(Boolean) && polish.on && polish.off,
+        polish ? polish.spans.filter(Boolean).length + ' spinners · toggle ' + polish.on + '/' + polish.off : 'not available');
+  check('about FAQ', !!polish && polish.faqCount >= 4 && /cause|causal/i.test(polish.faqText) &&
+        /OMNI/i.test(polish.faqText) && /cache/i.test(polish.faqText),
+        polish ? polish.faqCount + ' questions' : 'not available');
+
   // Export — PNG with baked-in caption plus reproducible JSON metadata.
   const exp = await evaluate(`({
     button: !!document.getElementById('graphExport'),
@@ -458,6 +512,19 @@ async function main() {
   check('series CSV export', csv.button && csv.bridge && !!csv.data &&
         csv.data.header === 'series,time_iso,time_ms,value' && csv.data.rows > 0 && csv.data.series > 0,
         csv.data ? csv.data.rows + ' rows · ' + csv.data.series + ' series' : 'no data');
+
+  // Full-catalogue export ignores the visible window and all graph filters.
+  const archiveCsv = await evaluate(`({
+    button: !!document.getElementById('archiveCsvBtn'),
+    data: typeof archiveCsvData === 'function' ? (() => {
+      const d = archiveCsvData();
+      return { header: d.header, rows: d.rows, archiveRows: S.q && S.q.t ? S.q.t.length : -1 };
+    })() : null
+  })`);
+  check('full-archive CSV export', archiveCsv.button && !!archiveCsv.data &&
+        archiveCsv.data.header === 'time_iso,time_ms,magnitude,latitude,longitude,syzygy' &&
+        archiveCsv.data.rows > 0 && archiveCsv.data.rows === archiveCsv.data.archiveRows,
+        archiveCsv.data ? archiveCsv.data.rows.toLocaleString() + ' rows (all archive)' : 'no data');
 
   // Event markers on the graph.
   const markers = await evaluate(`({
@@ -547,6 +614,18 @@ async function main() {
         tw.mag === 6 && tw.lo === 7 && tw.hi === 7 && tw.outside >= 0 && /shuffle band/.test(tw.out),
         tw ? tw.evDays + ' triggers · ±' + tw.w + 'd · M≥' + tw.mag + ' · ' +
              tw.outside + ' outside · env ' + tw.lo + '/' + tw.hi + ' · ' + String(tw.out).slice(0, 90) : 'no result');
+  const labCsv = await evaluate(`({
+    button: !!document.getElementById('labCsv'),
+    data: typeof labCsvData === 'function' ? (() => {
+      const d = labCsvData();
+      return { header: d.header, rows: d.rows, lagRows: LAG_CURVE ? LAG_CURVE.length : 0, twRows: TW_RESULT ? TW_RESULT.bins.length : 0 };
+    })() : null
+  })`).catch(() => null);
+  check('lab CSV export', !!labCsv && labCsv.button && !!labCsv.data &&
+        /^result,key_a,key_b,lag_months,day_offset/.test(labCsv.data.header) &&
+        labCsv.data.rows > 0 && labCsv.data.rows === labCsv.data.lagRows + labCsv.data.twRows,
+        labCsv && labCsv.data ? labCsv.data.rows + ' rows · ' + labCsv.data.lagRows + ' lag + ' +
+             labCsv.data.twRows + ' trigger' : 'no data');
   if (tw) await evaluate("document.getElementById('anaClose').click()");
 
   const papers = await switchView('tabPapers',

@@ -393,7 +393,8 @@ ipcMain.handle('save-file', async (_e, suggestedName, data, encoding) => {
     title: 'Export Chronos Terra finding',
     defaultPath: path.join(app.getPath('documents'), safeName),
     filters: [
-      { name: safeName.endsWith('.png') ? 'PNG image' : 'JSON data', extensions: [safeName.endsWith('.png') ? 'png' : 'json'] },
+      { name: safeName.endsWith('.png') ? 'PNG image' : safeName.endsWith('.csv') ? 'CSV data' : 'JSON data',
+        extensions: [safeName.endsWith('.png') ? 'png' : safeName.endsWith('.csv') ? 'csv' : 'json'] },
       { name: 'All files', extensions: ['*'] }
     ]
   });

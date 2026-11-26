@@ -1,7 +1,7 @@
 {
     "name":  "chronos-terra",
     "productName":  "ChronosTerra",
-    "version":  "0.18.0",
+    "version":  "0.19.0",
     "description":  "Planetary correlation observatory - quakes x solar x tides, 1970-present",
     "main":  "electron-main.js",
     "author":  "local",
