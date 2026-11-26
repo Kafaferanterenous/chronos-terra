@@ -48,6 +48,7 @@ header{
 button.chip{cursor:pointer;font-family:inherit}
 button.chip:hover{border-color:var(--accent)}
 .data-health.bad{border-color:rgba(255,138,138,.5);color:#ff9a9a}
+.data-health.stale{border-color:rgba(255,199,122,.55);color:#ffc77a}
 #healthPop{position:absolute;top:52px;right:18px;width:360px;max-height:70vh;overflow:auto;background:var(--bg2);border:1px solid var(--brd);border-radius:10px;box-shadow:0 18px 48px rgba(0,0,0,.55);padding:10px 12px;z-index:40}
 #healthPop.hidden{display:none}
 .hp-head{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--accent);display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
@@ -56,6 +57,11 @@ button.chip:hover{border-color:var(--accent)}
 .hp-row>span:last-child{color:var(--muted);white-space:nowrap}
 .hp-detail{flex-basis:100%;font-size:10.5px;color:#8b96bd;overflow-wrap:anywhere}
 .hp-foot{font-size:10.5px;color:#6f7ba0;line-height:1.5;margin-top:8px}
+.hp-stale{color:#ffc77a;margin-bottom:4px}
+.hp-cache{color:#8b96bd;overflow-wrap:anywhere;margin:4px 0 7px}
+.hp-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0}
+.hp-actions .hbtn{font-size:10.5px;padding:4px 9px}
+.hp-actions span{color:#8b96bd;font-size:10.5px}
 .view-tabs{display:flex;background:var(--card);border:1px solid var(--brd);border-radius:10px;overflow:hidden}
 .vt{background:none;border:none;color:var(--muted);padding:8px 16px;font-size:13.5px;cursor:pointer}
 .vt.on{color:#fff;background:linear-gradient(135deg,#2a5fb8,#5ea8ff)}
@@ -222,6 +228,19 @@ button.chip:hover{border-color:var(--accent)}
 #capPopup b.t{color:var(--warm);font-size:14px}
 #capPopup .row{display:flex;justify-content:space-between;border-bottom:1px dashed rgba(140,160,220,.15);padding:3px 0}
 #capPopup .row span:first-child{color:var(--muted)}
+.pp-fields{margin-top:7px;border-top:1px dashed rgba(140,160,220,.2);padding-top:6px}
+.field-ctx{font-size:11.5px;line-height:1.5}
+.field-ctx .fc-head,.field-ctx .fc-note{color:var(--muted)}
+.field-ctx .fc-head{font-weight:600;color:var(--warm);margin-bottom:4px}
+.field-ctx .fc-head span{color:var(--accent);font-size:10px}
+.field-ctx .fc-row{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed rgba(140,160,220,.14);padding:2px 0}
+.field-ctx .fc-row>span:first-child{color:var(--muted)}
+.field-ctx .fc-note{margin-top:6px;font-size:10.5px;line-height:1.45}
+.field-ctx .fc-none,.fc-none{color:#6f7ba0;font-style:italic}
+.field-ctx .fc-old{color:#ffab7a}
+.field-ctx .fc-fresh{color:#7ee0a8}
+.fc-age{color:#8b96bd;margin-left:5px}
+.ev-fields{color:#91a0c8;font-size:10.5px;line-height:1.45;margin-top:2px;padding-left:2px}
 #anaPanel{
   position:absolute;right:14px;top:52px;width:352px;max-height:calc(100% - 70px);
   overflow-y:auto;z-index:21;padding:14px;
@@ -418,6 +437,12 @@ button.chip:hover{border-color:var(--accent)}
 }
 .magnet-dialog-head button:hover{color:var(--txt)}
 .magnet-dialog-note{font-size:12px;line-height:1.55;color:var(--muted);margin-bottom:14px}
+.magnet-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.magnet-tools .hbtn{font-size:11px;padding:5px 10px}
+.magnet-tools span{font-size:10.5px;color:var(--muted)}
+.m-meta .stale{color:#ffc77a}
+.m-meta .fresh{color:#7ee0a8}
+.cache-paths{font-size:10.5px;color:#8b96bd;line-height:1.55;overflow-wrap:anywhere;margin-top:6px}
 .magnet-row{
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   border:1px solid var(--brd);border-radius:10px;padding:9px 11px;margin-bottom:8px;

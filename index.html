@@ -221,6 +221,8 @@
       <p>USGS earthquake archives &amp; live feeds · GFZ Potsdam Kp/ap/SN/F10.7 since 1932 (Matzka et al. 2021) ·
       SILSO sunspot numbers · NASA DONKI CME database · GDACS hazard alerts · Natural Earth / fraxen plate geometry ·
       capitals reference values are approximations.</p>
+      <h4>Cache location</h4>
+      <p id="aboutCache" class="cache-paths">checking…</p>
       <p class="fineprint">Exploratory research tool. Built as a personal exploration of theoretical vectors by someone without any formal education in the field, only a passing interest. Nothing here is peer-reviewed science or a prediction, and using this tool — for anything at all — is entirely at your own responsibility.</p>
     </div>
   </div>
@@ -271,7 +273,10 @@
     <label class="ana-lbl">Data archive</label>
     <div id="arcStat" class="arcstat">checking…</div>
     <button id="updBtn" class="hbtn upd-btn">⟳ Update archive (missing data only)</button>
-    <p class="fineprint">Settings persist on this computer. This app is personal exploration of theoretical vectors, not science — use at your own responsibility.</p>
+    <label class="ana-lbl">Cache location</label>
+    <div id="cachePaths" class="arcstat">checking…</div>
+    <button id="cacheOpenBtn" class="hbtn" style="font-size:11px;margin-top:6px">📂 Open cache folder</button>
+    <p class="fineprint">Portable folders beside the exe are used when writable; otherwise caches fall back to your per-user app-data folder. Window size, position and zoom are remembered. This app is personal exploration of theoretical vectors, not science — use at your own responsibility.</p>
   </div>
 
   <div id="helpPanel" class="full-view hidden">
@@ -354,7 +359,8 @@
         <h3>8 · Settings, shortcuts &amp; tips</h3>
         <ul>
           <li>⚙️ <b>Settings</b>: spoken announcements, checking-for-new-events interval, timeline sweep speed, DONKI history depth.</li>
-          <li><span class="kbd">F11</span> fullscreen · <span class="kbd">Esc</span> close overlays/help/tutorial.</li>
+          <li><span class="kbd">F11</span> fullscreen · <span class="kbd">Ctrl/Cmd +</span> / <span class="kbd">−</span> / <span class="kbd">0</span> zoom in / out / reset · <span class="kbd">Esc</span> close overlays/help/tutorial. Window bounds and zoom are remembered between runs.</li>
+          <li>The <b>data badge</b> in the top bar opens a health popup: per-feed status, stale bundled OMNI series, a one-click refresh for live feeds/archives, and the exact cache paths. Slow OMNI series have their own “Refresh all stale” button in the Graphs → data dialog.</li>
           <li>ℹ️ <b>What am I looking at?</b> gives the quick orientation · ❓ this help screen is always one click away · ▶ tour replays the intro.</li>
           <li>Heads-up: the <b>proton-density → quake</b> idea is the Marchitelli et al. (2020) hypothesis — exploratory only.</li>
         </ul>
@@ -400,6 +406,7 @@
         <h3>10 · Data sources</h3>
         <ul>
           <li><b>Quakes</b>: USGS archive &amp; live feeds (M4.5+, 1970→today) · <b>Indices</b>: GFZ Potsdam Kp/ap/SN/F10.7, SILSO sunspots · <b>Space weather</b>: NASA OMNIWeb (OMNI2 daily), NASA DONKI CME/flare DB, NOAA SWPC live feeds · <b>Hazards</b>: GDACS · <b>Geography</b>: Natural Earth, fraxen plate geometry · <b>News</b>: USGS earthquake feed + Google News RSS (sun / volcanoes / weather) · Capital-city coordinates are approximations.</li>
+          <li><b>Event field context</b>: click any archive or live quake to see the nearest daily OMNI2 IMF Bz, IMF |B|, solar-wind E-field, Dst, pressure and proton density at that UTC time. These are <b>global L1 / planetary proxies</b>, not local magnetic or electric measurements above the epicentre. Coverage ends 2025-12-31 in the bundled series; gaps and stale values are labelled rather than hidden.</li>
           <li class="h-ft">Exploratory research tool. Nothing here is peer-reviewed science or a prediction.</li>
         </ul>
       </div>
@@ -418,7 +425,7 @@
       <label class="tt" data-tip="F10.7 solar radio flux (GFZ) — a proxy for EUV/radio output that reaches Earth."><input type="checkbox" id="gf10"><i style="width:10px;height:10px;border-radius:2px;background:#4fffd7;display:inline-block"></i>F10.7 flux</label>
       <label class="tt" data-tip="Quake count per time bin, from the USGS/ISC archive. Use the M≥ selector to change which magnitudes count."><input type="checkbox" id="gq" checked><i style="width:10px;height:10px;border-radius:2px;background:#5ea8ff;display:inline-block"></i>quakes</label>
       <label class="tt" data-tip="Live solar-wind PROTON DENSITY from NOAA ACE SWEPAM (L1 point, next to the SOHO satellite). Only ~24 h of live data exists. THEORETICAL/EXPERIMENTAL — this is the Marchitelli et al. 2020 trigger hypothesis (proton density → M≥5.6 quakes ~1 day later). Exploratory only, not a verified mechanism."><input type="checkbox" id="gpd"><i style="width:10px;height:10px;border-radius:2px;background:#ff9de2;display:inline-block"></i>proton density <span style="opacity:.6">(live · theory)</span></label>
-      <label class="tt" data-tip="Bundled historical solar-wind PROTON DENSITY (NASA OMNIWeb OMNI2, daily, 1970→now). THEORETICAL — the Marchitelli et al. 2020 trigger hypothesis (proton density → M≥5.6 quakes ~1 day later). Exploratory only."><input type="checkbox" id="gd2"><i style="width:10px;height:10px;border-radius:2px;background:#35c9c0;display:inline-block"></i>proton density <span style="opacity:.6">(hist · theory)</span></label>
+      <label class="tt" data-tip="Bundled historical solar-wind PROTON DENSITY (NASA OMNIWeb OMNI2, daily, 1970→2025-12-31). THEORETICAL — the Marchitelli et al. 2020 trigger hypothesis (proton density → M≥5.6 quakes ~1 day later). Exploratory only."><input type="checkbox" id="gd2"><i style="width:10px;height:10px;border-radius:2px;background:#35c9c0;display:inline-block"></i>proton density <span style="opacity:.6">(hist · theory)</span></label>
       <label class="tt" data-tip="Historical solar-wind dynamic (flow) pressure in nPa (OMNI2 daily). The shock-pressure term behind the Marchitelli mechanism."><input type="checkbox" id="gpr"><i style="width:10px;height:10px;border-radius:2px;background:#e0b0ff;display:inline-block"></i>SW pressure</label>
       <label class="tt" data-tip="Historical southward IMF Bz (GSM, nT) — the solar magnetic field coupling that opens Earth's magnetosphere (the 'sun &amp; Earth are magnets' term)."><input type="checkbox" id="gbz"><i style="width:10px;height:10px;border-radius:2px;background:#7dff6a;display:inline-block"></i>IMF Bz</label>
       <label class="tt" data-tip="Historical IMF total field strength |B| (nT) — how strong the sun's magnetic field is at L1."><input type="checkbox" id="gim"><i style="width:10px;height:10px;border-radius:2px;background:#ffd76a;display:inline-block"></i>IMF |B|</label>
@@ -531,7 +538,8 @@
 <div id="magnetDialog" class="magnet-dialog hidden">
   <div class="magnet-dialog-head"><span>Space-weather data</span><button id="magnetDialogClose">×</button></div>
   <div class="magnet-dialog-body">
-    <p class="magnet-dialog-note">Bundled historical daily series from <b>NASA OMNIWeb (OMNI2)</b>, 1970→now. Each can be individually refreshed from the live mirror. Any refresh is saved to your local cache so the app keeps working offline.</p>
+    <p class="magnet-dialog-note">Bundled historical daily series from <b>NASA OMNIWeb (OMNI2)</b>, 1970→2025-12-31. Clicking a quake now samples these series at the event's UTC time; they are <b>global L1 / planetary proxies</b>, not local fields above the epicentre. Each can be individually refreshed from the live mirror, and any refresh is saved to your local cache so the app keeps working offline.</p>
+    <div class="magnet-tools"><button id="magnetRefreshAll" class="hbtn">⟳ Refresh all stale OMNI series (slow)</button><span id="magnetRefreshAllStatus"></span></div>
     <div id="magnetRows"></div>
   </div>
 </div>

@@ -1,7 +1,9 @@
+$end = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+$start = (Get-Date).ToUniversalTime().AddDays(-7).ToString('yyyy-MM-dd')
 foreach ($u in @(
   'https://cdaw.gsfc.nasa.gov/CME_list/UNIVERSAL/2026_07/univ2026_07.txt',
   'https://cdaw.gsfc.nasa.gov/CME_list/UNIVERSAL/2026_08/univ2026_08.txt',
-  'https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/getCME'
+  'https://ccmc.gsfc.nasa.gov/DONKI-API/get/CME?startDate=' + $start + '&endDate=' + $end
 )) {
   try {
     $r = Invoke-WebRequest -UseBasicParsing $u -TimeoutSec 45

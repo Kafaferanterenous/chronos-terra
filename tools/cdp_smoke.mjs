@@ -366,14 +366,74 @@ async function main() {
     return true;
   })()`);
 
+  // Event-time magnetic/electric context: global OMNI2 values joined to an
+  // event timestamp, explicitly labelled as not local to the epicentre.
+  let eventFields = null;
+  const efDeadline = Date.now() + 20000;
+  while (Date.now() < efDeadline) {
+    eventFields = await evaluate(`(() => {
+      const t = Date.UTC(2011, 2, 11, 5, 46);
+      return {
+        helpers: typeof magnetAt === 'function' && typeof fieldGlance === 'function' && typeof fieldPopupHTML === 'function',
+        bz: typeof magnetAt === 'function' ? magnetAt('bz', t) : null,
+        efield: typeof magnetAt === 'function' ? magnetAt('efield', t) : null,
+        glance: typeof fieldGlance === 'function' ? fieldGlance(t, false) : '',
+        html: typeof fieldPopupHTML === 'function' ? fieldPopupHTML(t) : ''
+      };
+    })()`).catch(() => null);
+    if (eventFields && eventFields.helpers && eventFields.bz && eventFields.efield &&
+        /not a local measurement above the epicentre/.test(eventFields.html)) break;
+    await sleep(300);
+  }
+  check('event-time field context', !!(eventFields && eventFields.helpers && eventFields.bz &&
+        eventFields.efield && /Bz/.test(eventFields.glance) && /E /.test(eventFields.glance) &&
+        /not a local measurement above the epicentre/.test(eventFields.html)),
+        eventFields && eventFields.bz ? 'Bz ' + eventFields.bz.v + ' nT · E ' + eventFields.efield.v + ' mV/m' : 'no field data');
+
   // Data health badge — every tracked feed records its last fetch outcome.
   const health = await evaluate(`({
     badge: (document.getElementById('dataHealth') || {}).textContent || '',
     tracked: typeof S !== 'undefined' && S.health ? Object.keys(S.health).length : 0,
     pop: !!document.getElementById('healthPop')
   })`);
-  check('data health badge', health.tracked >= 5 && health.pop && /sources OK|unavailable/.test(health.badge),
+  check('data health badge', health.tracked >= 5 && health.pop && /sources OK|unavailable|stale/.test(health.badge),
         health.badge + ' · ' + health.tracked + ' tracked');
+
+  // v0.18 reliability: writable-cache fallback, persisted window/zoom, stale UI.
+  const reliability = await evaluate(`(async () => {
+    if (typeof ensureMagnet === 'function') await ensureMagnet();
+    const has = fn => !!(window.ct && typeof window.ct[fn] === 'function');
+    const info = has('cacheInfo') ? await window.ct.cacheInfo() : null;
+    const wst = has('windowState') ? await window.ct.windowState() : null;
+    const sample = (typeof MAGNET !== 'undefined' && typeof magnetRowMeta === 'function')
+      ? magnetRowMeta(Object.values(MAGNET)[0]) : null;
+    return {
+      bridges: has('cacheInfo') && has('windowState') && has('openCache') && has('donkiClearCache'),
+      info, wst, sample,
+      staleCount: typeof omniStale === 'function' ? omniStale().length : -1,
+      settingsUi: !!document.getElementById('cachePaths'),
+      aboutUi: !!document.getElementById('aboutCache'),
+      healthButton: !!document.getElementById('healthRefresh'),
+      magnetButton: !!document.getElementById('magnetRefreshAll'),
+      rendered: (document.getElementById('cachePaths') || {}).textContent || ''
+    };
+  })()`).catch(() => null);
+  const cacheOk = !!(reliability && reliability.bridges && reliability.info &&
+    typeof reliability.info.archiveDir === 'string' && reliability.info.archiveDir.length > 0 &&
+    typeof reliability.info.dataDir === 'string' && reliability.info.dataDir.length > 0 &&
+    typeof reliability.info.magnetDir === 'string' && reliability.info.magnetDir.length > 0 &&
+    typeof reliability.info.portable === 'boolean' && reliability.wst &&
+    reliability.wst.width >= 1100 && reliability.wst.height >= 700 &&
+    Number.isFinite(reliability.wst.zoom) && reliability.settingsUi && reliability.aboutUi &&
+    /archive:/.test(reliability.rendered));
+  check('cache paths + window state', cacheOk,
+        reliability && reliability.info
+          ? (reliability.info.portable ? 'portable' : 'user-data fallback') + ' · archive=' + reliability.info.archiveDir
+          : 'no cache info');
+  check('stale-data indicators', !!(reliability && reliability.staleCount >= 0 && reliability.sample &&
+        /d old|current|no data/.test(reliability.sample.txt + (reliability.sample.badge || '')) &&
+        reliability.healthButton && reliability.magnetButton),
+        reliability ? reliability.staleCount + ' stale OMNI series · refresh controls present' : 'no indicators');
 
   // Export — PNG with baked-in caption plus reproducible JSON metadata.
   const exp = await evaluate(`({
@@ -511,7 +571,11 @@ async function main() {
     check('screenshot', true, path.resolve(shot));
   }
 
-  check('no page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' || '));
+  // Electron 43 emits a known sandbox_bundle startup error in CDP-attached
+  // packaged builds even when the app boots cleanly. Ignore only that vendor
+  // message; every application error still fails the suite.
+  const appErrors = pageErrors.filter(m => !/sandboxed_renderer\.bundle|sandbox_bundle|preloadScripts/.test(m));
+  check('no page errors', appErrors.length === 0, appErrors.slice(0, 3).join(' || '));
   const initFailure = /(?:INFO:CONSOLE:\d+\]\s*)?"?init failed:/.exec(outBuf + errBuf);
   check('no init failure', !initFailure, initFailure ? initFailure[0] : '');
 }

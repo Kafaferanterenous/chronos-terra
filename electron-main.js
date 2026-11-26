@@ -1,21 +1,40 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
 const https = require('https');
 const crypto = require('crypto');
 
+/* ---------- writable runtime paths ----------
+   USB-portable layout is preferred when the folder beside the exe is writable.
+   If it is not (read-only install location, /Applications, /usr/share), fall
+   back to Electron's per-user data dir. Bundled data in the asar stays read-only. */
+const USER_DATA = app.getPath('userData');
+const BUNDLED_DATA = path.join(__dirname, 'data');
+function writableDir(candidates, fallback) {
+  for (const dir of candidates) {
+    if (!dir) continue;
+    try { fs.mkdirSync(dir, { recursive: true }); fs.accessSync(dir, fs.constants.W_OK); return dir; }
+    catch (e) { /* try next candidate */ }
+  }
+  try { fs.mkdirSync(fallback, { recursive: true }); } catch (e) { }
+  return fallback;
+}
+const besideExe = process.env.PORTABLE_EXECUTABLE_DIR
+  || (app.isPackaged ? path.dirname(app.getPath('exe')) : __dirname);
+const PORTABLE_ARCHIVE = path.join(besideExe, 'data_archive');
+const PORTABLE_DATA = path.join(besideExe, 'data');
+const FALLBACK_ARCHIVE = path.join(USER_DATA, 'data_archive');
+const FALLBACK_DATA = path.join(USER_DATA, 'data');
+const ARCHIVE_DIR = process.env.CHRONOS_ARCHIVE || writableDir([PORTABLE_ARCHIVE], FALLBACK_ARCHIVE);
+const DATA_WRITE_DIR = writableDir([PORTABLE_DATA], FALLBACK_DATA);
+
 /* ---------- incremental archive updater ----------
    Historical years never change -> download each missing year once;
    current year CSV refreshed at most every 6 h; solar files refreshed
    when stale. Rebuilds source\data\quakes.json.gz exactly like
    tools\merge_quakes.mjs so the renderer sees one identical format. */
-const ARCHIVE_DIR = process.env.CHRONOS_ARCHIVE || (() => {
-  const appPath = process.env.PORTABLE_EXECUTABLE_DIR
-    || (app.isPackaged ? path.dirname(app.getPath('exe')) : __dirname);
-  return path.join(appPath, 'data_archive');
-})();
 
 function httpGetStr(url, redirects) {
   redirects = redirects || 0;
@@ -141,11 +160,7 @@ let win = null;
 let quakeCache = null;
 
 function dataFile(name) {
-  if (app.isPackaged) {
-    const base = process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath('exe'));
-    return path.join(base, 'data', name);
-  }
-  return path.join(__dirname, 'data', name);
+  return path.join(DATA_WRITE_DIR, name);
 }
 
 /* NASA DONKI with 30-min disk cache so restarts don't burn DEMO_KEY quota */
@@ -173,7 +188,7 @@ ipcMain.handle('donki', (_e, url) => {
 /* DONKI single-chunk fetch helper */
 function donkiChunk(type, start, end) {
   return new Promise(res => {
-    const u = 'https://api.nasa.gov/DONKI/' + type + '?startDate=' + start + '&endDate=' + end + '&api_key=DEMO_KEY';
+    const u = 'https://ccmc.gsfc.nasa.gov/DONKI-API/get/' + type + '?startDate=' + start + '&endDate=' + end;
     https.get(u, r => {
       let b = '';
       r.on('data', c => b += c);
@@ -226,6 +241,22 @@ ipcMain.handle('donki-load-cache', (_e, type) => {
 ipcMain.handle('donki-save-cache', (_e, type, data) => {
   const f = path.join(ARCHIVE_DIR, 'donki_30d_' + type + '.json');
   try { fs.writeFileSync(f, JSON.stringify(data)); return { ok: true }; } catch (e) { return { ok: false }; }
+});
+
+/* Force a fresh DONKI fetch on the next load by removing both the 30-day
+   JSON cache and any short-lived URL-keyed temp responses. */
+ipcMain.handle('donki-clear-cache', (_e, type) => {
+  const safe = String(type || '').replace(/[^A-Z]/g, '').slice(0, 10);
+  try {
+    const f = path.join(ARCHIVE_DIR, 'donki_30d_' + safe + '.json');
+    if (fs.existsSync(f)) fs.unlinkSync(f);
+    for (const name of fs.readdirSync(app.getPath('temp'))) {
+      if (name.indexOf('chronos_donki_') === 0) {
+        try { fs.unlinkSync(path.join(app.getPath('temp'), name)); } catch (e) { }
+      }
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 });
 
 ipcMain.handle('quake-archive', () => {
@@ -417,10 +448,86 @@ ipcMain.handle('magnet-save', (_e, type, data) => {
   }
 });
 
+/* Renderer-facing view of where data is bundled vs where it may be written. */
+ipcMain.handle('cache-info', () => {
+  const ageDays = f => {
+    try { return Math.max(0, Math.round((Date.now() - fs.statSync(f).mtimeMs) / 864e5)); }
+    catch (e) { return null; }
+  };
+  return {
+    archiveDir: ARCHIVE_DIR,
+    dataDir: DATA_WRITE_DIR,
+    bundledDir: BUNDLED_DATA,
+    magnetDir: MAGNET_CACHE_DIR(),
+    donkiTemp: app.getPath('temp'),
+    userData: USER_DATA,
+    portable: ARCHIVE_DIR === PORTABLE_ARCHIVE,
+    override: !!process.env.CHRONOS_ARCHIVE,
+    donki30d: {
+      CME: ageDays(path.join(ARCHIVE_DIR, 'donki_30d_CME.json')),
+      FLR: ageDays(path.join(ARCHIVE_DIR, 'donki_30d_FLR.json'))
+    }
+  };
+});
+
+ipcMain.handle('open-cache', async () => {
+  try {
+    const err = await shell.openPath(ARCHIVE_DIR);
+    return err ? { ok: false, error: err } : { ok: true };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+
+/* ---------- window state ----------
+   Size, position, maximise/fullscreen and zoom are restored from userData.
+   Ctrl/Cmd + / - / 0 adjusts zoom; F11 toggles fullscreen. */
+const WINDOW_STATE_FILE = path.join(USER_DATA, 'window-state.json');
+let windowSaveTimer = null;
+function readWindowState() {
+  try { return JSON.parse(fs.readFileSync(WINDOW_STATE_FILE, 'utf8')) || {}; }
+  catch (e) { return {}; }
+}
+function snapshotWindow() {
+  if (!win || win.isDestroyed()) return {};
+  const b = win.getBounds();
+  return {
+    x: b.x, y: b.y, width: b.width, height: b.height,
+    maximized: win.isMaximized(), fullscreen: win.isFullScreen(),
+    zoom: win.webContents.getZoomLevel()
+  };
+}
+function saveWindowState() {
+  try { fs.writeFileSync(WINDOW_STATE_FILE, JSON.stringify(snapshotWindow())); }
+  catch (e) { }
+}
+function scheduleWindowSave() {
+  clearTimeout(windowSaveTimer);
+  windowSaveTimer = setTimeout(saveWindowState, 400);
+}
+function restoredBounds(st) {
+  const width = Math.max(1100, Number(st.width) || 1600);
+  const height = Math.max(700, Number(st.height) || 950);
+  const x = Number(st.x), y = Number(st.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return { width, height };
+  const shows = screen.getAllDisplays();
+  const fits = shows.some(d => {
+    const a = d.workArea;
+    return x >= a.x && y >= a.y && x + width <= a.x + a.width && y + height <= a.y + a.height;
+  });
+  if (fits) return { x, y, width, height };
+  const a = screen.getPrimaryDisplay().workArea;
+  return {
+    x: a.x + Math.max(0, Math.floor((a.width - Math.min(width, a.width)) / 2)),
+    y: a.y + Math.max(0, Math.floor((a.height - Math.min(height, a.height)) / 2)),
+    width: Math.min(width, a.width), height: Math.min(height, a.height)
+  };
+}
+ipcMain.handle('window-state', () => snapshotWindow());
+
 function createWindow() {
   try { fs.mkdirSync(ARCHIVE_DIR, { recursive: true }); } catch (e) { }
-  win = new BrowserWindow({
-    width: 1600, height: 950,
+  const st = readWindowState();
+  const bounds = restoredBounds(st);
+  win = new BrowserWindow(Object.assign({
     minWidth: 1100, minHeight: 700,
     backgroundColor: '#070b16',
     show: false,
@@ -429,15 +536,35 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     }
-  });
-  win.maximize();   // fill the available screen by default
+  }, bounds));
+  if (Number.isFinite(st.zoom)) {
+    try { win.webContents.setZoomLevel(Math.max(-3, Math.min(4, st.zoom))); } catch (e) { }
+  }
+  if (st.fullscreen === true) win.setFullScreen(true);
+  else if (st.maximized !== false) win.maximize();   // first run fills the screen
   win.setMenuBarVisibility(false);
-  // F11 toggles fullscreen so the app can scale to fill any screen
   win.webContents.on('before-input-event', (_e, input) => {
-    if (input.type === 'keyDown' && input.key === 'F11') {
+    if (input.type !== 'keyDown') return;
+    if (input.key === 'F11') {
       win.setFullScreen(!win.isFullScreen());
+      scheduleWindowSave();
+      return;
+    }
+    if (input.control || input.meta) {
+      const z = win.webContents.getZoomLevel();
+      if (input.key === '+' || input.key === '=') {
+        win.webContents.setZoomLevel(Math.min(4, z + 1)); scheduleWindowSave();
+      } else if (input.key === '-') {
+        win.webContents.setZoomLevel(Math.max(-3, z - 1)); scheduleWindowSave();
+      } else if (input.key === '0') {
+        win.webContents.setZoomLevel(0); scheduleWindowSave();
+      }
     }
   });
+  ['resize', 'move', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']
+    .forEach(ev => win.on(ev, scheduleWindowSave));
+  win.webContents.on('zoom-changed', scheduleWindowSave);
+  win.on('close', () => { clearTimeout(windowSaveTimer); saveWindowState(); });
   win.loadFile(path.join(__dirname, 'index.html'));
   win.once('ready-to-show', () => win.show());
 }

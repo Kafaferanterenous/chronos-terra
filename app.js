@@ -15,7 +15,8 @@ const S = {
   sunBars: false,
   capitals: null,
   climate: [],
-  health: {}
+  health: {},
+  cacheInfo: null
 };
 
 const $ = id => document.getElementById(id);
@@ -38,6 +39,19 @@ const FEED_LABELS = {
   omni: 'OMNIWeb solar wind',
   news: 'Live news feeds'
 };
+const OMNI_STALE_DAYS = 7;
+function magnetStaleDays(m) {
+  const d = MAGNETDATA && MAGNETDATA[m.key];
+  if (!d || !d.pts || !d.pts.length) return null;
+  return Math.max(0, Math.round((Date.now() - d.pts[d.pts.length - 1].t) / 864e5));
+}
+function omniStale() {
+  if (typeof MAGNET === 'undefined') return [];
+  return Object.values(MAGNET).filter(m => {
+    const age = magnetStaleDays(m);
+    return age !== null && age > OMNI_STALE_DAYS;
+  });
+}
 function markFeed(key, ok, detail) {
   S.health[key] = { ok: !!ok, at: Date.now(), detail: String(detail || '') };
   renderHealth();
@@ -45,34 +59,91 @@ function markFeed(key, ok, detail) {
 function healthSummary() {
   const keys = Object.keys(S.health);
   const bad = keys.filter(k => !S.health[k].ok);
-  return { total: keys.length, bad, ok: keys.length - bad.length };
+  return { total: keys.length, bad, ok: keys.length - bad.length, stale: omniStale() };
 }
 function renderHealth() {
   const badge = $('dataHealth');
   if (!badge) return;
   const s = healthSummary();
-  badge.className = 'chip data-health' + (s.bad.length ? ' bad' : '');
+  badge.className = 'chip data-health' + (s.bad.length ? ' bad' : (s.stale.length ? ' stale' : ''));
   if (!s.total) badge.textContent = 'data: checking…';
   else if (s.bad.length) badge.textContent = 'data: ' + s.bad.length + ' unavailable';
+  else if (s.stale.length) badge.textContent = 'data: ' + s.stale.length + ' stale';
   else badge.textContent = 'data: ' + s.total + ' sources OK';
   badge.title = (s.bad.length
     ? s.bad.map(k => FEED_LABELS[k] || k).join(', ') + ' unavailable — click for details'
-    : 'Last fetch succeeded for every tracked source — click for details');
+    : s.stale.length
+      ? 'Bundled OMNI series end ' + s.stale.length + ' days+ before today — click for refresh options'
+      : 'Last fetch succeeded for every tracked source — click for details');
   const pop = $('healthPop');
   if (!pop) return;
-  const esc = v => String(v).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]);
   const rows = Object.keys(FEED_LABELS).map(k => {
     const h = S.health[k];
     const state = !h ? '<span style="color:#6f7ba0">not loaded</span>'
       : h.ok ? '<span style="color:#7ee0a8">OK</span>' : '<span style="color:#ff8a8a">unavailable</span>';
     const age = h ? Math.max(0, Math.round((Date.now() - h.at) / 60000)) + ' min ago' : '—';
-    const detail = h && h.detail ? '<div class="hp-detail">' + esc(h.detail) + '</div>' : '';
+    const detail = h && h.detail ? '<div class="hp-detail">' + escapeHtml(h.detail) + '</div>' : '';
     return '<div class="hp-row"><span>' + FEED_LABELS[k] + '</span><span>' + state + ' · ' + age + '</span>' + detail + '</div>';
   }).join('');
+  const staleTxt = s.stale.length
+    ? 'Stale bundles: ' + s.stale.map(m => m.label).join(', ') + '. Use “Refresh all stale” for live feeds, or data ▾ to refresh OMNI (slow).'
+    : 'Bundled OMNI series are current.';
   pop.innerHTML = '<div class="hp-head">Data source health <button id="healthClose">×</button></div>' + rows +
-    '<div class="hp-foot">Cached data keeps Chronos Terra working when a live feed is down. “OK” means the last fetch succeeded.</div>';
+    '<div class="hp-foot"><div id="hpStale" class="hp-stale">' + escapeHtml(staleTxt) + '</div>' +
+    '<div id="hpCache" class="hp-cache">cache paths loading…</div>' +
+    '<div class="hp-actions"><button id="healthRefresh" class="hbtn">⟳ Refresh stale data</button>' +
+    '<span id="healthRefreshStatus"></span></div>' +
+    'Cached data keeps Chronos Terra working when a live feed is down. “OK” means the last fetch succeeded.</div>';
   const close = $('healthClose');
   if (close) close.addEventListener('click', () => { pop.classList.add('hidden'); badge.setAttribute('aria-expanded', 'false'); });
+  const rb = $('healthRefresh');
+  if (rb) rb.addEventListener('click', refreshStaleData);
+  fillCacheInfo();
+}
+function fillCacheInfo() {
+  const c = S.cacheInfo;
+  const targets = [$('cachePaths'), $('hpCache'), $('aboutCache')];
+  if (!c) { targets.forEach(el => { if (el) el.textContent = 'cache paths unavailable'; }); return; }
+  const where = c.override ? 'override folder' : (c.portable ? 'portable folder' : 'user-data fallback');
+  const txt = where + ' · archive: ' + c.archiveDir + ' · data: ' + c.dataDir + ' · OMNI: ' + c.magnetDir;
+  targets.forEach(el => { if (el) { el.textContent = txt; el.title = txt; } });
+}
+async function loadCacheInfo() {
+  try { S.cacheInfo = await window.ct.cacheInfo(); }
+  catch (e) { S.cacheInfo = null; log('cache info unavailable: ' + (e && e.message || e)); }
+  fillCacheInfo();
+}
+let refreshingStale = false;
+async function refreshStaleData() {
+  if (refreshingStale) return;
+  refreshingStale = true;
+  const say = txt => { const el = $('healthRefreshStatus'); if (el) el.textContent = txt; log('refresh stale: ' + txt); };
+  const firstBtn = $('healthRefresh');
+  if (firstBtn) firstBtn.disabled = true;
+  try {
+    say('archive…');
+    const r = await window.ct.updateArchive();
+    if (r && r.rebuilt) {
+      markFeed('quakes', true, 'archive rebuilt');
+      say('archive updated — ' + (r.fetchedYears ? r.fetchedYears.length : 0) + ' yr fetched');
+    } else say('archive already current' + (r && r.errors && r.errors.length ? ' (' + r.errors.length + ' errors)' : ''));
+    say('live solar wind…');
+    await loadProtons(true);
+    say('CME + flares…');
+    await window.ct.donkiClearCache('CME');
+    await window.ct.donkiClearCache('FLR');
+    await loadCME();
+    await loadFlares();
+    say('done — live feeds refreshed; OMNI series use data ▾');
+    await loadCacheInfo();
+  } catch (e) {
+    say('refresh failed: ' + (e && e.message || e));
+  } finally {
+    refreshingStale = false;
+    const b = $('healthRefresh');
+    if (b) b.disabled = false;
+    renderHealth();
+  }
 }
 function wireHealth() {
   const badge = $('dataHealth'), pop = $('healthPop');
@@ -88,6 +159,7 @@ function wireHealth() {
     if (!pop.classList.contains('hidden') && !pop.contains(e.target) && e.target !== badge) pop.classList.add('hidden');
   });
   renderHealth();
+  loadCacheInfo();
 }
 
 function hideBoot() {
@@ -304,7 +376,7 @@ function drawQuakeWindow() {
   for (let i = a; i < b; i += stride) {
     feats[k++] = {
       type: 'Feature',
-      properties: { m: S.q.m[i], g: S.q.syz ? S.q.syz[i] : 0 },
+      properties: { m: S.q.m[i], g: S.q.syz ? S.q.syz[i] : 0, t: S.q.t[i] * 1000 },
       geometry: { type: 'Point', coordinates: [S.q.lo[i], S.q.la[i]] }
     };
   }
@@ -637,6 +709,29 @@ function wirePopups() {
     S.map.on('mouseleave', name, () => S.map.getCanvas().style.cursor = '');
   };
   pop('hazards-circle', pr => '<div class="pp"><b>' + (HZ_COLORS[pr.k] ? pr.k : 'EVENT') + '</b> ' + (pr.title || '') + '</div>');
+  // Archive quakes: show global field context sampled at the event's own UTC time.
+  S.map.on('click', 'quakes-circle', e => {
+    const f = e.features && e.features[0];
+    if (!f) return;
+    const pr = f.properties;
+    const when = new Date(pr.t).toLocaleString('en-AU', {
+      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+    const popup = new maplibregl.Popup({ closeButton: false, maxWidth: '340px' })
+      .setLngLat(f.geometry.coordinates)
+      .setHTML('<div class="pp"><b>M' + (+pr.m).toFixed(1) + '</b> archive quake<br>' + when +
+        '<div class="pp-fields">loading field context…</div></div>')
+      .addTo(S.map);
+    ensureMagnet().then(() => {
+      const slot = popup.getElement() && popup.getElement().querySelector('.pp-fields');
+      if (slot) slot.innerHTML = fieldPopupHTML(pr.t);
+    }).catch(() => {
+      const slot = popup.getElement() && popup.getElement().querySelector('.pp-fields');
+      if (slot) slot.innerHTML = '<div class="fc-none">field data unavailable</div>';
+    });
+  });
+  S.map.on('mouseenter', 'quakes-circle', () => S.map.getCanvas().style.cursor = 'pointer');
+  S.map.on('mouseleave', 'quakes-circle', () => S.map.getCanvas().style.cursor = '');
   pop('volcs-circle', pr => {
     if (!S.volcs) return '<div class="pp">volcano</div>';
     const i = S.volcsByNum.get(pr.n);
@@ -646,11 +741,28 @@ function wirePopups() {
       '<br>last known eruption: ' + (a[4] != null ? a[4] : 'unknown') +
       '<br>GVP #' + a[0] + '</div>';
   });
-  pop('live24-circle', pr => {
-    const d = new Date(pr.time || Date.now());
-    return '<div class="pp"><b>M' + (+pr.mag).toFixed(1) + '</b> live<br>' +
-      (pr.place || '') + '<br>' + d.toLocaleString('en-AU') + '</div>';
+  S.map.on('click', 'live24-circle', e => {
+    const f = e.features && e.features[0];
+    if (!f) return;
+    const pr = f.properties;
+    const t = pr.time ? new Date(pr.time).getTime() : Date.now();
+    const d = new Date(t);
+    const popup = new maplibregl.Popup({ closeButton: false, maxWidth: '340px' })
+      .setLngLat(f.geometry.coordinates)
+      .setHTML('<div class="pp"><b>M' + (+pr.mag).toFixed(1) + '</b> live<br>' +
+        (pr.place || '') + '<br>' + d.toLocaleString('en-AU') +
+        '<div class="pp-fields">loading field context…</div></div>')
+      .addTo(S.map);
+    ensureMagnet().then(() => {
+      const slot = popup.getElement() && popup.getElement().querySelector('.pp-fields');
+      if (slot) slot.innerHTML = fieldPopupHTML(t);
+    }).catch(() => {
+      const slot = popup.getElement() && popup.getElement().querySelector('.pp-fields');
+      if (slot) slot.innerHTML = '<div class="fc-none">field data unavailable</div>';
+    });
   });
+  S.map.on('mouseenter', 'live24-circle', () => S.map.getCanvas().style.cursor = 'pointer');
+  S.map.on('mouseleave', 'live24-circle', () => S.map.getCanvas().style.cursor = '');
   pop('cme-fill', pr => '<div class="pp"><b>☄ CME arrival footprint</b><br>' + (pr.label || '') + '</div>');
   pop('cme-line', pr => '<div class="pp"><b>☄ CME arrival footprint</b><br>' + (pr.label || '') + '</div>');
   pop('cmeghost-line', pr => '<div class="pp"><b>☄ CME (predicted)</b><br>' + (pr.label || '') + '</div>');
@@ -1040,7 +1152,7 @@ async function loadFlares() {
   const box = $('flrBox');
   const end = new Date().toISOString().slice(0, 10);
   const start = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-  const url = 'https://api.nasa.gov/DONKI/FLR?startDate=' + start + '&endDate=' + end + '&api_key=DEMO_KEY';
+  const url = 'https://ccmc.gsfc.nasa.gov/DONKI-API/get/FLR?startDate=' + start + '&endDate=' + end;
 
   function renderFlares(list) {
     const mx = list.filter(f => /^[MX]/.test(f.classType || ''));
@@ -1707,7 +1819,7 @@ async function loadCME() {
   const box = $('cmeBox');
   const end = new Date().toISOString().slice(0, 10);
   const start = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-  const url = 'https://api.nasa.gov/DONKI/CME?startDate=' + start + '&endDate=' + end + '&api_key=DEMO_KEY';
+  const url = 'https://ccmc.gsfc.nasa.gov/DONKI-API/get/CME?startDate=' + start + '&endDate=' + end;
 
   function renderCME(list) {
     const rows = [];
@@ -1971,6 +2083,67 @@ function windowPoints(pts, t0, t1) {
   const out = [];
   for (const p of pts) if (p.v != null && isFinite(p.v) && p.t >= t0 && p.t <= t1) out.push(p);
   return out;
+}
+/* Nearest daily global OMNI2 value for an event timestamp. These are L1 solar-wind
+   and planetary-index measurements, NOT fields measured above the epicentre.
+   Binary search keeps per-event popups cheap even with 20k daily points. */
+function magnetAt(key, t) {
+  const d = MAGNETDATA[key];
+  if (!d || !d.pts || !d.pts.length || !isFinite(t)) return null;
+  const pts = d.pts;
+  let lo = 0, hi = pts.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].t < t) lo = mid + 1; else hi = mid; }
+  let best = null;
+  if (lo < pts.length) best = pts[lo];
+  if (lo > 0) {
+    const prev = pts[lo - 1];
+    if (!best || Math.abs(prev.t - t) < Math.abs(best.t - t)) best = prev;
+  }
+  if (!best || best.v == null || !isFinite(best.v)) return null;
+  const m = MAGNET[key] || { label: key, unit: '', color: '#9fb4e0' };
+  return {
+    key, t: best.t, v: best.v,
+    ageDays: Math.round(Math.abs(best.t - t) / 864e5),
+    label: m.label, unit: m.unit, color: m.color
+  };
+}
+function fieldValueText(rec, signed) {
+  if (!rec) return '';
+  const v = rec.v;
+  return ((signed && v > 0) ? '+' : '') + (Math.abs(v) < 100 ? v.toFixed(2) : v.toFixed(0)) + ' ' + rec.unit;
+}
+// Compact one-line context for event markers and notable-quake rows.
+function fieldGlance(t, html) {
+  const recs = ['bz', 'efield', 'dst'].map(k => magnetAt(k, t)).filter(Boolean);
+  if (!recs.length) return '';
+  const by = {};
+  for (const r of recs) by[r.key] = r;
+  const parts = [];
+  if (by.bz) parts.push('Bz ' + fieldValueText(by.bz, true));
+  if (by.efield) parts.push('E ' + fieldValueText(by.efield, false));
+  if (by.dst) parts.push('Dst ' + fieldValueText(by.dst, true));
+  const age = Math.max(...recs.map(r => r.ageDays));
+  const suffix = (age > 2 ? ' · ' + age + ' d old' : '') + ' ·theory';
+  if (!html) return parts.join(' · ') + suffix;
+  let i = 0;
+  return parts.map(p => {
+    const rec = recs[i++];
+    return '<span style="color:' + rec.color + '">' + escapeHtml(p) + '</span>';
+  }).join(' · ') + '<span class="fc-age">' + escapeHtml(suffix) + '</span>';
+}
+function fieldPopupHTML(t) {
+  const rows = Object.keys(MAGNET).map(id => MAGNET[id]).map(m => {
+    const r = magnetAt(m.key, t);
+    if (!r) return '<div class="fc-row"><span>' + escapeHtml(m.label) + '</span><span class="fc-none">no coverage</span></div>';
+    const age = r.ageDays > 2
+      ? '<span class="fc-old">' + r.ageDays + ' d old</span>'
+      : '<span class="fc-fresh">same day</span>';
+    const signed = m.key === 'bz' || m.key === 'dst';
+    return '<div class="fc-row"><span>' + escapeHtml(m.label) + '</span><span style="color:' + m.color + '">' +
+      escapeHtml(fieldValueText(r, signed)) + ' · ' + age + '</span></div>';
+  }).join('');
+  return '<div class="field-ctx"><div class="fc-head">Field context at event time <span>·theory</span></div>' +
+    rows + '<div class="fc-note">Global daily OMNI2 / L1 and planetary indices — <b>not a local measurement above the epicentre</b>. Nearest available day; gaps are shown as “no coverage”.</div></div>';
 }
 // Region filters: coarse lat/lon rectangles. Deliberately simple and labelled
 // as rectangles — these are comparison slices, not tectonic-plate polygons.
@@ -2296,7 +2469,10 @@ function buildGraphEvents(t0, t1) {
         if (top.length > 8) top.shift();
       }
     }
-    for (const q of top) add(q.t, 'M' + q.m.toFixed(1) + ' quake', '#ff6b6b', 1);
+    for (const q of top) {
+      const fc = fieldGlance(q.t, false);
+      add(q.t, 'M' + q.m.toFixed(1) + ' quake' + (fc ? ' · ' + fc : ''), '#ff6b6b', 1);
+    }
   }
   out.sort((a, b) => a.t - b.t);
   graphEventCache = out;
@@ -2636,10 +2812,18 @@ function wireGraphs() {
 /* ---------- magnet data management dialog ---------- */
 function magnetRowMeta(m) {
   const d = MAGNETDATA[m.key];
-  if (!d || !d.pts) return { txt: 'no data', cache: false };
+  if (!d || !d.pts) return { txt: 'no data', cache: false, badge: '' };
   const a = new Date(d.pts[0].t).toISOString().slice(0, 10);
   const b = new Date(d.pts[d.pts.length - 1].t).toISOString().slice(0, 10);
-  return { txt: d.pts.length.toLocaleString() + ' daily pts · ' + a + ' → ' + b + (d.cache ? ' · refreshed' : ' · bundled'), cache: !!d.cache };
+  const age = magnetStaleDays(m);
+  const badge = age === null ? ''
+    : age > OMNI_STALE_DAYS
+      ? '<span class="stale"> · ' + age + ' d old</span>'
+      : '<span class="fresh"> · current</span>';
+  return {
+    txt: d.pts.length.toLocaleString() + ' daily pts · ' + a + ' → ' + b + (d.cache ? ' · refreshed' : ' · bundled'),
+    cache: !!d.cache, badge
+  };
 }
 function renderMagnetRows() {
   const box = $('magnetRows');
@@ -2649,7 +2833,7 @@ function renderMagnetRows() {
     const meta = magnetRowMeta(m);
     html += '<div class="magnet-row">' +
       '<div class="m-info"><div class="m-name">' + m.label + ' <span style="color:' + m.color + '">●</span></div>' +
-      '<div class="m-meta">OMNI2 var ' + m.varNum + ' · ' + m.unit + ' · ' + meta.txt + '</div></div>' +
+      '<div class="m-meta">OMNI2 var ' + m.varNum + ' · ' + m.unit + ' · ' + meta.txt + meta.badge + '</div></div>' +
       '<div class="m-status" id="mst-' + m.key + '"></div>' +
       '<button data-key="' + m.key + '" data-sid="' + sid + '">⟳ refresh</button></div>';
   }
@@ -2729,9 +2913,40 @@ function parseOmniDaily(html) {
   }
   return rows;
 }
+let refreshingMagnetAll = false;
+async function refreshAllMagnet() {
+  if (refreshingMagnetAll) return;
+  refreshingMagnetAll = true;
+  const btn = $('magnetRefreshAll');
+  const say = txt => { const el = $('magnetRefreshAllStatus'); if (el) el.textContent = txt; };
+  if (btn) btn.disabled = true;
+  try {
+    const all = Object.entries(MAGNET);
+    const stale = all.filter(([, m]) => {
+      const age = magnetStaleDays(m);
+      return age === null || age > OMNI_STALE_DAYS;
+    });
+    const targets = stale.length ? stale : all;
+    for (let i = 0; i < targets.length; i++) {
+      const [sid, m] = targets[i];
+      say('refreshing ' + (i + 1) + '/' + targets.length + ' · ' + m.label + '…');
+      await refreshMagnet({ disabled: false }, m.key, sid);
+    }
+    say('done — ' + targets.length + ' series checked');
+    renderHealth();
+  } catch (e) {
+    say('failed: ' + (e && e.message || e));
+  } finally {
+    refreshingMagnetAll = false;
+    const b = $('magnetRefreshAll');
+    if (b) b.disabled = false;
+  }
+}
 function wireMagnetData() {
   $('magnetDataBtn').addEventListener('click', () => { ensureMagnet().then(() => { renderMagnetRows(); $('magnetDialog').classList.remove('hidden'); }); });
   $('magnetDialogClose').addEventListener('click', () => $('magnetDialog').classList.add('hidden'));
+  const ra = $('magnetRefreshAll');
+  if (ra) ra.addEventListener('click', refreshAllMagnet);
 }
 
 /* ---------- below-graph enrichment ---------- */
@@ -3021,7 +3236,9 @@ function enrichNotable(t0, t1) {
     const top = big.slice(0, 4);
     for (const e of top) {
       const d = new Date(e[1]).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-      html += '<li><span class="ev">M' + e[0].toFixed(1) + '</span> ' + d + '  (' + e[2].toFixed(1) + '°, ' + e[3].toFixed(1) + '°)</li>';
+      const fc = fieldGlance(e[1], true) || '<span class="fc-none">no OMNI field coverage</span>';
+      html += '<li><span class="ev">M' + e[0].toFixed(1) + '</span> ' + d + '  (' + e[2].toFixed(1) + '°, ' + e[3].toFixed(1) + '°)' +
+        '<div class="ev-fields">' + fc + '</div></li>';
     }
   }
   // sunspot max in window
@@ -3044,6 +3261,7 @@ function enrichNotable(t0, t1) {
   }
   if (html === '<h5>Notable in window</h5><ul>') html += '<li>No notable events</li>';
   html += '</ul>';
+  html += '<div class="g-note">Field lines beside quakes use the <b>nearest daily global OMNI2 value</b> at the event time (Bz, motional E-field, Dst). These are L1 / planetary proxies, <b>not local measurements above the epicentre</b>; “d old” flags gaps.</div>';
   return html;
 }
 function enrichCharging(t0, t1, active) {
@@ -3087,7 +3305,7 @@ function renderGraphEnrich(t0, t1, active, bin) {
   html += '<div class="g-blk">' + enrichCharging(t0, t1, active) + '</div>';
   html += '<div class="g-blk" style="flex-basis:100%"><h5>Solar-proton hypothesis (Marchitelli et al. 2020)</h5>' +
     '<div class="row"><span>Reported finding</span><span>Solar-wind <b>proton density</b> correlates with worldwide <b>M≥5.6</b> quakes at <b>~1 day</b> lag (p &lt; 1e-5); signal grows with magnitude threshold</span></div>' +
-    '<div class="row"><span>What we show here</span><span><b>Historical proton density</b> (bundled OMNI2 daily, 1970→now, <b>·theory</b>) plus <b>IMF Bz / |B|, SW pressure, Dst and E-field</b>, all from the same OMNIWeb feed. The live 24 h ACE series is the magenta “proton density (live)”. All exploratory, not a verified mechanism</span></div>' +
+    '<div class="row"><span>What we show here</span><span><b>Historical proton density</b> (bundled OMNI2 daily, 1970→2025-12-31, <b>·theory</b>) plus <b>IMF Bz / |B|, SW pressure, Dst and E-field</b>, all from the same OMNIWeb feed. The live 24 h ACE series is the magenta “proton density (live)”. All exploratory, not a verified mechanism</span></div>' +
     '<div class="g-note">Try: enable <b>proton density</b> + <b>IMF Bz</b> + <b>quakes (M≥6)</b> + <b>Kp</b>, then page the 3Y–25Y ranges and look at the 0-lag cross-correlation, the day-lag scan strip, and the cumulative “charging” bar. Use the <b>data ▾</b> dialog to refresh any of these series individually.</div></div>';
   box.innerHTML = html;
   const slider = $('lagSteps');
@@ -3121,7 +3339,7 @@ function findingMeta() {
     theory: s.id === 'gpd' || !!MAGNET[s.id]
   }));
   return {
-    app: 'Chronos Terra', version: '0.16.0', exported: new Date().toISOString(),
+    app: 'Chronos Terra', version: '0.18.0', exported: new Date().toISOString(),
     window: {
       from: new Date(g.t0).toISOString(), to: new Date(g.t1).toISOString(),
       range: g.sel || ($('gRange') && $('gRange').value) || '',
@@ -3570,6 +3788,12 @@ function bootMsg(msg) { const b = $('bootSub'); if (b) b.textContent = msg; }
       $('aboutPanel').classList.add('hidden');
     });
     $('settingsClose').addEventListener('click', () => $('settingsPanel').classList.add('hidden'));
+    if ($('cacheOpenBtn')) $('cacheOpenBtn').addEventListener('click', async () => {
+      try {
+        const r = await window.ct.openCache();
+        if (r && r.ok === false) notify('Cache folder', String(r.error || r));
+      } catch (e) { notify('Cache folder', String(e && e.message || e)); }
+    });
     $('helpBtn').addEventListener('click', () => {
       $('helpPanel').classList.toggle('hidden');
       $('aboutPanel').classList.add('hidden');

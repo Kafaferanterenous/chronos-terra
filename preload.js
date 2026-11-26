@@ -17,8 +17,12 @@ contextBridge.exposeInMainWorld('ct', {
   donkiHistoryRead: (type) => ipcRenderer.invoke('donki-history-read', type),
   donkiLoadCache: (type) => ipcRenderer.invoke('donki-load-cache', type),
   donkiSaveCache: (type, data) => ipcRenderer.invoke('donki-save-cache', type, data),
+  donkiClearCache: (type) => ipcRenderer.invoke('donki-clear-cache', type),
   updateArchive: () => ipcRenderer.invoke('update-archive'),
   archiveInfo: () => ipcRenderer.invoke('archive-info'),
+  cacheInfo: () => ipcRenderer.invoke('cache-info'),
+  openCache: () => ipcRenderer.invoke('open-cache'),
+  windowState: () => ipcRenderer.invoke('window-state'),
   saveFile: (name, data, encoding) => ipcRenderer.invoke('save-file', name, data, encoding),
   log: (msg) => console.log('[renderer] ' + msg)
 });
